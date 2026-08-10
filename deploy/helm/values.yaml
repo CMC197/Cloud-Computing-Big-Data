@@ -1,0 +1,168 @@
+# =====================================================================
+# SmartPark — Helm values
+#
+# ⚠️ DHBWCloud: Ressourcen sind knapp (typ. 2–4 vCPU, 4–8 GB RAM).
+#    JEDE Komponente braucht requests UND limits, sonst werden Pods
+#    OOMKilled und reißen andere mit. Die Summe der requests unten
+#    muss auf den VM-Flavor passen — vor dem Deploy nachrechnen!
+#
+# ⚠️ Keine echten Credentials in diese Datei. Lokale Overrides gehören
+#    in values.local.yaml (ist gitignored).
+# =====================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------- global
+global:
+  namespace: smartpark
+  # TODO(AP5): Registry-Entscheidung — Forgejo in-cluster / GHCR / Docker Hub
+  imageRegistry: ghcr.io/<org>
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# ---------------------------------------------------- fachliche Parameter
+# Landen als ConfigMap und werden von Producer, Spark und API gelesen.
+config:
+  kafka:
+    topic: parking-events
+    partitions: 3          # = max. paralleler Consumer (Skalierungsachse)
+    replicationFactor: 1   # Single-Node k3s
+  processing:
+    windowDuration: "1 minute"
+    watermarkDelay: "2 minutes"
+    sessionTimeout: "30 minutes"
+  storage:
+    bucket: smartpark-lakehouse
+    bronzePath: bronze/parking_events
+    goldPath: gold/zone_availability
+  producer:
+    eventRate: 10          # Events pro Sekunde und Replica
+
+# ------------------------------------------------------------ Ingestion
+kafka:
+  enabled: true
+  # StatefulSet: stabile Netzwerk-Identität + eigenes PVC je Broker
+  replicas: 1
+  image:
+    repository: bitnami/kafka
+    tag: "3.7"
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""       # k3s-Default: local-path
+  resources:
+    requests: { cpu: 200m, memory: 768Mi }
+    limits:   { cpu: 1,    memory: 1Gi }
+
+# -------------------------------------------------------------- Storage
+minio:
+  enabled: true
+  # StatefulSet: hält die Lakehouse-Daten
+  replicas: 1
+  image:
+    repository: minio/minio
+    tag: "RELEASE.2024-06-13T22-53-53Z"
+  persistence:
+    enabled: true
+    size: 10Gi
+  # ⚠️ Platzhalter! Echte Keys per --set oder values.local.yaml,
+  #    landen im Cluster als Secret.
+  auth:
+    existingSecret: ""
+    rootUser: minioadmin
+    rootPassword: CHANGEME
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# ----------------------------------------------------------- Processing
+spark:
+  enabled: true
+  image:
+    repository: smartpark-processing
+    tag: ""                # von Skaffold injiziert
+  driver:
+    memory: 512m
+  executor:
+    instances: 1           # Skalierungsachse, wenn RAM reicht
+    memory: 512m
+  checkpoint:
+    enabled: true
+    size: 2Gi              # PVC für Spark-Checkpoints
+  resources:
+    requests: { cpu: 300m, memory: 1Gi }
+    limits:   { cpu: 1,    memory: 1536Mi }
+
+# -------------------------------------------------------------- Serving
+api:
+  enabled: true
+  image:
+    repository: smartpark-serving
+    tag: ""
+  replicas: 2
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests: { cpu: 50m,  memory: 128Mi }
+    limits:   { cpu: 300m, memory: 256Mi }
+  probes:
+    liveness:  { path: /health, initialDelaySeconds: 10, periodSeconds: 15 }
+    readiness: { path: /health, initialDelaySeconds: 5,  periodSeconds: 10 }
+
+# ------------------------------------------------------------- Producer
+producer:
+  enabled: true
+  image:
+    repository: smartpark-producer
+    tag: ""
+  replicas: 1              # Skalierungsachse: hochdrehen = mehr Last
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 200m, memory: 128Mi }
+
+# ------------------------------------------------------------------- UI
+ui:
+  enabled: true
+  image:
+    repository: smartpark-ui
+    tag: ""
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests: { cpu: 20m,  memory: 32Mi }
+    limits:   { cpu: 100m, memory: 128Mi }
+
+# -------------------------------------------------------------- Ingress
+# k3s bringt Traefik mit. Host-basiert; erreichbar nur aus dem DHBW-Netz/VPN.
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  hosts:
+    ui:  smartpark-ui.<zone>.dhbw.site
+    api: smartpark-api.<zone>.dhbw.site
+  tls: []
+
+# ---------------------------------------------------------- Autoscaling
+# Per Skaffold-Profil aktivierbar:  skaffold dev -p autoscaling
+autoscaling:
+  enabled: false
+  api:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 60
+  # Bonus: KEDA auf Kafka-Consumer-Lag statt nur CPU
+  keda:
+    enabled: false
+    lagThreshold: "100"
+
+# ---------------------------------------------------------- Monitoring
+# Per Skaffold-Profil aktivierbar:  skaffold dev -p monitoring
+monitoring:
+  enabled: false
+  serviceMonitor:
+    interval: 30s

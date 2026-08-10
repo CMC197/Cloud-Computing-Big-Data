@@ -1,0 +1,33 @@
+# CODEOWNERS — automatische Review-Zuweisung nach Arbeitspaket
+#
+# 🔴 AUSFÜLLEN: @handle durch die echten GitHub-Handles ersetzen.
+#    (GitLab: Datei nach .gitlab/CODEOWNERS verschieben, Syntax ist identisch.)
+#
+# Nebeneffekt: dokumentiert maschinenlesbar, wer welchen Bereich verantwortet
+# → stützt das Kriterium "Eigenanteil" (5 P.).
+
+# Default: alle reviewen, wenn nichts Spezifischeres greift
+*                       @handle1 @handle2 @handle3 @handle4
+
+# AP1 — Ingestion
+/producer/              @handle1
+
+# AP2 — Processing
+/processing/            @handle2
+
+# AP3 — Storage (Schema/Stammdaten)
+/data/                  @handle1
+
+# AP4 — Serving + UI
+/serving/               @handle3
+/ui/                    @handle3
+
+# AP5 — DHBWCloud / DevOps
+/ansible/               @handle4
+/deploy/                @handle4
+/skaffold.yaml          @handle4
+/.github/workflows/     @handle4
+
+# AP6 — Bericht: bewusst alle, das ist das Abgabedokument
+/README.md              @handle1 @handle2 @handle3 @handle4
+/docs/                  @handle1 @handle2 @handle3 @handle4

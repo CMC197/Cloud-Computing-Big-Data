@@ -1,0 +1,24 @@
+# Einheitliche Zeilenenden — verhindert "ganze Datei geändert"-Diffs
+# zwischen Windows- und Linux-/macOS-Arbeitsplätzen.
+* text=auto eol=lf
+
+# Shell-Skripte und k8s/Ansible-YAML MÜSSEN LF haben (laufen im Container/auf der VM)
+*.sh        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+
+# Binärdateien nicht anfassen
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.pdf       binary
+*.zip       binary
+*.parquet   binary
+
+# Lockfiles im Diff einklappen (Review-Rauschen)
+package-lock.json  linguist-generated=true -diff
+yarn.lock          linguist-generated=true -diff
+poetry.lock        linguist-generated=true -diff

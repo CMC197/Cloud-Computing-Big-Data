@@ -1,0 +1,20 @@
+# AP5 — DHBWCloud-Provisioning (Checkliste Phase 0b)
+#
+#   ansible-playbook -i inventory.ini deploy.yaml
+#
+# TODO(AP5): Tasks aus dem GridFlex-Kursbeispiel adaptieren.
+---
+- name: Provisioniere k3s auf der DHBWCloud
+  hosts: k3s_server
+  become: true
+  tasks:
+    - name: Platzhalter
+      ansible.builtin.debug:
+        msg: "TODO(AP5): k3s, Registry, KEDA, ArgoCD, Observability"
+
+# Geplante Task-Dateien unter tasks/:
+#   k3s.yaml            k3s-Server + Agents, kubeconfig einsammeln
+#   registry.yaml       Container-Registry (Forgejo in-cluster oder GHCR-Secret)
+#   keda.yaml           KEDA fuer Consumer-Lag-Autoscaling (Bonus)
+#   argocd.yaml         GitOps (Bonus)
+#   observability.yaml  Prometheus + Grafana (Bonus)

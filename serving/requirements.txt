@@ -1,0 +1,6 @@
+# AP4 — Serving-API
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+confluent-kafka==2.4.0
+# Query-Layer — TODO: Entscheidung DuckDB vs. Trino (siehe docs/TEAM.md §6)
+duckdb==1.0.0

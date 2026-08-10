@@ -1,0 +1,167 @@
+# =========================================================
+# SmartPark — .gitignore
+# CC&BD Prüfungsleistung 2026 · DHBWCloud
+# =========================================================
+# WICHTIG (Abgabe-Kriterium "Reproduzierbarkeit & Struktur"):
+# Keine Secrets im Klartext, keine node_modules/, keine __pycache__/
+# in der finalen ZIP. Diese Datei sorgt dafür.
+# =========================================================
+
+# ---------- Python (producer/, processing/, serving/) ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtualenvs
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Test / Lint / Type-Checking
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter (Spikes / Explorationen)
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------- Node / React (ui/) ----------
+node_modules/
+.pnp/
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.yarn/cache/
+.yarn/install-state.gz
+
+# Build-Output (wird im Container gebaut, gehört nicht ins Repo)
+ui/dist/
+ui/build/
+ui/.vite/
+.next/
+out/
+.eslintcache
+
+# ---------- Secrets & Konfiguration ----------
+# NIEMALS committen: MinIO-Keys, kubeconfig, SSH-Keys, .env
+.env
+.env.*
+!.env.example
+*.env.local
+
+# Kubernetes / Helm
+kubeconfig
+kubeconfig*
+*.kubeconfig
+.kube/
+k3s.yaml
+# gerenderte oder befüllte Secret-Manifeste
+**/secrets.yaml
+**/secret-*.yaml
+**/*-secret.yaml
+!**/secret-*.example.yaml
+# lokale Helm-Overrides mit echten Credentials
+deploy/helm/values.local.yaml
+deploy/helm/values.secret.yaml
+deploy/helm/charts/
+deploy/helm/Chart.lock
+*.tgz
+
+# Ansible (DHBWCloud-Provisioning)
+ansible/inventory.ini
+!ansible/inventory.example.ini
+ansible/*.retry
+ansible/vault_pass*
+ansible/.vault_pass
+ansible/host_vars/
+ansible/group_vars/*/vault.yml
+
+# SSH / Zertifikate
+*.pem
+*.key
+*.crt
+*.p12
+id_rsa*
+id_ed25519*
+!*.pub.example
+
+# Cloud-Credentials
+*openrc.sh
+clouds.yaml
+.aws/
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# ---------- Spark / Delta / Streaming-Laufzeitdaten ----------
+# Checkpoints & lokale Lakehouse-Daten gehören NICHT ins Repo
+checkpoints/
+_checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+_delta_log/
+data/bronze/
+data/silver/
+data/gold/
+data/minio/
+# Stammdaten (Zonen/Tarife) bleiben versioniert:
+!data/*.csv
+!data/*.json
+!data/README.md
+
+# Kafka lokal
+kafka-logs/
+zookeeper-data/
+
+# ---------- Container / Tooling ----------
+.skaffold/
+docker-compose.override.yml
+*.log
+
+# ---------- IDE & OS ----------
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Abgabe-Artefakte ----------
+# Die ZIP wird beim Abgeben erzeugt, nicht versioniert
+SmartPark_Gruppe_*.zip
+*.zip
+!docs/**/*.zip

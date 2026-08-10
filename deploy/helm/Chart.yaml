@@ -1,0 +1,36 @@
+apiVersion: v2
+name: smartpark
+description: Streaming-basiertes Smart-Parking-System (Kafka, Spark, Delta/MinIO, FastAPI, React) für k3s auf der DHBWCloud
+type: application
+
+# Chart-Version: bei jeder Chart-Änderung erhöhen (SemVer)
+version: 0.1.0
+
+# Version der Anwendung selbst
+appVersion: "0.1.0"
+
+keywords:
+  - streaming
+  - kappa
+  - kafka
+  - spark
+  - delta-lake
+  - smart-parking
+
+maintainers:
+  - name: <Name 1>
+    email: <...@student.dhbw-mannheim.de>
+
+# TODO(AP5): Entscheiden, ob Kafka und MinIO als Subcharts eingebunden oder
+# selbst getemplatet werden.
+#   - Subcharts (bitnami/kafka, minio/minio): schneller, aber schwerer zu
+#     erklären und die Charts bringen viel Ballast mit (RAM!).
+#   - Eigene Templates: mehr Arbeit, aber die Rubrik bewertet "korrekte,
+#     kohärente Manifeste" — selbst geschrieben ist hier nachweisbarer.
+# Empfehlung: eigene, schlanke Templates. Bei Zeitnot Subcharts nachziehen.
+#
+# dependencies:
+#   - name: kafka
+#     version: "26.x.x"
+#     repository: https://charts.bitnami.com/bitnami
+#     condition: kafka.enabled
