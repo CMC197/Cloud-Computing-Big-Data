@@ -1,0 +1,35 @@
+{{- if .Values.producer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-producer
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Release.Name }}-producer
+spec:
+  replicas: {{ .Values.producer.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-producer
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-producer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: producer
+          image: "{{ .Values.producer.image.repository }}:{{ .Values.producer.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          env:
+            - name: KAFKA_BROKERS
+              value: "{{ .Release.Name }}-kafka:9092"
+            - name: KAFKA_TOPIC
+              value: "{{ .Values.config.kafka.topic }}"
+            - name: EVENT_RATE
+              value: "{{ .Values.config.producer.eventRate }}"
+          resources:
+{{ toYaml .Values.producer.resources | indent 12 }}
+{{- end }}

@@ -57,7 +57,7 @@ kafka:
 
 # -------------------------------------------------------------- Storage
 minio:
-  enabled: true
+  enabled: false
   # StatefulSet: hält die Lakehouse-Daten
   replicas: 1
   image:
@@ -78,7 +78,7 @@ minio:
 
 # ----------------------------------------------------------- Processing
 spark:
-  enabled: true
+  enabled: false
   image:
     repository: smartpark-processing
     tag: ""                # von Skaffold injiziert
@@ -96,7 +96,7 @@ spark:
 
 # -------------------------------------------------------------- Serving
 api:
-  enabled: true
+  enabled: false
   image:
     repository: smartpark-serving
     tag: ""
@@ -124,7 +124,7 @@ producer:
 
 # ------------------------------------------------------------------- UI
 ui:
-  enabled: true
+  enabled: false
   image:
     repository: smartpark-ui
     tag: ""
@@ -139,7 +139,7 @@ ui:
 # -------------------------------------------------------------- Ingress
 # k3s bringt Traefik mit. Host-basiert; erreichbar nur aus dem DHBW-Netz/VPN.
 ingress:
-  enabled: true
+  enabled: false
   className: traefik
   annotations: {}
   hosts:

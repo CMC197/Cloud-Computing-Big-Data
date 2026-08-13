@@ -1,16 +1,3 @@
-# =====================================================================
-# SmartPark — Skaffold (Dev-Workflow, analog GridFlex-Kursbeispiel)
-#
-#   skaffold dev                  Watch + Build + Deploy + Logs
-#   skaffold run                  einmalig bauen und deployen
-#   skaffold dev -p monitoring    zusätzlich Prometheus/Grafana
-#   skaffold dev -p autoscaling   HPA/KEDA aktivieren
-#   skaffold delete               Release wieder entfernen
-#
-# ⚠️ DHBWCloud: Der k3s-Cluster ist REMOTE. Images müssen also gepusht
-#    werden (local.push: true) oder in die clusterinterne Registry.
-#    Für lokale Tests (kind/minikube) das Profil "local" nutzen.
-# =====================================================================
 apiVersion: skaffold/v4beta11
 kind: Config
 
@@ -18,7 +5,6 @@ metadata:
   name: smartpark
 
 build:
-  # TODO(AP5): Registry-Entscheidung — GHCR / Docker Hub / Forgejo in-cluster
   tagPolicy:
     gitCommit: {}
   artifacts:
@@ -26,30 +12,10 @@ build:
       context: producer
       docker:
         dockerfile: Dockerfile
-
-    - image: ghcr.io/cmc197/smartpark-processing
-      context: processing
-      docker:
-        dockerfile: Dockerfile
-
-    - image: ghcr.io/cmc197/smartpark-serving
-      context: serving
-      docker:
-        dockerfile: Dockerfile
-
-    - image: ghcr.io/cmc197/smartpark-ui
-      context: ui
-      docker:
-        dockerfile: Dockerfile
-      sync:
-        # Hot-Reload für UI-Assets ohne Rebuild
-        manual:
-          - src: "src/**/*.{js,jsx,ts,tsx,css}"
-            dest: .
   local:
-    push: true          # Remote-Cluster braucht Registry
-    useBuildkit: true
-    concurrency: 2      # DHBWCloud-VMs haben wenig CPU
+    push: true
+    useBuildkit: false
+    concurrency: 2
 
 manifests:
   helm:
@@ -60,60 +26,20 @@ manifests:
         createNamespace: true
         valuesFiles:
           - deploy/helm/values.yaml
-        # Skaffold ersetzt die Image-Referenzen durch die frisch gebauten Tags
         setValueTemplates:
           producer.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_producer}}"
           producer.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_producer}}"
-          spark.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_processing}}"
-          spark.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_processing}}"
-          api.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_serving}}"
-          api.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_serving}}"
-          ui.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_ui}}"
-          ui.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_ui}}"
 
 deploy:
   helm: {}
 
-portForward:
-  # Fallback, wenn der Traefik-Ingress über IPv6 zickt
-  - resourceType: service
-    resourceName: smartpark-ui
-    port: 8080
-    localPort: 8080
-  - resourceType: service
-    resourceName: smartpark-api
-    port: 8000
-    localPort: 8000
-
 profiles:
-  # ------------------------------------------------ lokale Entwicklung
-  # kind/minikube: kein Push nötig
   - name: local
     patches:
       - op: replace
         path: /build/local/push
         value: false
 
-  # ------------------------------------------------------- Monitoring
-  # skaffold dev -p monitoring
-  - name: monitoring
-    patches:
-      - op: add
-        path: /manifests/helm/releases/0/setValues
-        value:
-          monitoring.enabled: true
-
-  # ------------------------------------------------------ Autoscaling
-  # skaffold dev -p autoscaling   → HPA auf der API, optional KEDA
-  - name: autoscaling
-    patches:
-      - op: add
-        path: /manifests/helm/releases/0/setValues
-        value:
-          autoscaling.enabled: true
-
-  # ------------------------------------------------- Lastszenario
-  # Producer hochskalieren für den Skalierungsnachweis (Screenshots!)
   - name: load
     patches:
       - op: add
