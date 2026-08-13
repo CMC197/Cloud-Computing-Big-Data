@@ -17,7 +17,7 @@ fullnameOverride: ""
 global:
   namespace: smartpark
   # TODO(AP5): Registry-Entscheidung — Forgejo in-cluster / GHCR / Docker Hub
-  imageRegistry: ghcr.io/<org>
+  imageRegistry: ghcr.io/cmc197
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
 

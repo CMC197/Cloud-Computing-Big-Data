@@ -22,22 +22,22 @@ build:
   tagPolicy:
     gitCommit: {}
   artifacts:
-    - image: ghcr.io/<org>/smartpark-producer
+    - image: ghcr.io/cmc197/smartpark-producer
       context: producer
       docker:
         dockerfile: Dockerfile
 
-    - image: ghcr.io/<org>/smartpark-processing
+    - image: ghcr.io/cmc197/smartpark-processing
       context: processing
       docker:
         dockerfile: Dockerfile
 
-    - image: ghcr.io/<org>/smartpark-serving
+    - image: ghcr.io/cmc197/smartpark-serving
       context: serving
       docker:
         dockerfile: Dockerfile
 
-    - image: ghcr.io/<org>/smartpark-ui
+    - image: ghcr.io/cmc197/smartpark-ui
       context: ui
       docker:
         dockerfile: Dockerfile
@@ -62,14 +62,14 @@ manifests:
           - deploy/helm/values.yaml
         # Skaffold ersetzt die Image-Referenzen durch die frisch gebauten Tags
         setValueTemplates:
-          producer.image.repository: "{{.IMAGE_REPO_ghcr_io_org_smartpark_producer}}"
-          producer.image.tag: "{{.IMAGE_TAG_ghcr_io_org_smartpark_producer}}"
-          spark.image.repository: "{{.IMAGE_REPO_ghcr_io_org_smartpark_processing}}"
-          spark.image.tag: "{{.IMAGE_TAG_ghcr_io_org_smartpark_processing}}"
-          api.image.repository: "{{.IMAGE_REPO_ghcr_io_org_smartpark_serving}}"
-          api.image.tag: "{{.IMAGE_TAG_ghcr_io_org_smartpark_serving}}"
-          ui.image.repository: "{{.IMAGE_REPO_ghcr_io_org_smartpark_ui}}"
-          ui.image.tag: "{{.IMAGE_TAG_ghcr_io_org_smartpark_ui}}"
+          producer.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_producer}}"
+          producer.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_producer}}"
+          spark.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_processing}}"
+          spark.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_processing}}"
+          api.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_serving}}"
+          api.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_serving}}"
+          ui.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_ui}}"
+          ui.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_ui}}"
 
 deploy:
   helm: {}
