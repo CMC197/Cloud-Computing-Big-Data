@@ -71,7 +71,7 @@ minio:
   auth:
     existingSecret: ""
     rootUser: minioadmin
-    rootPassword: CHANGEME
+    rootPassword: minioadmin123
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 512Mi }
