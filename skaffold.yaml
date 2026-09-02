@@ -16,6 +16,10 @@ build:
       context: processing
       docker:
         dockerfile: Dockerfile
+    - image: ghcr.io/cmc197/smartpark-serving
+      context: serving
+      docker:
+        dockerfile: Dockerfile
   local:
     push: true
     useBuildkit: false
@@ -35,6 +39,8 @@ manifests:
           producer.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_producer}}"
           spark.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_processing}}"
           spark.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_processing}}"
+          api.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_serving}}"
+          api.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_serving}}"
 
 deploy:
   helm: {}

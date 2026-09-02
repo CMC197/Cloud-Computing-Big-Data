@@ -96,7 +96,7 @@ spark:
 
 # -------------------------------------------------------------- Serving
 api:
-  enabled: false
+  enabled: true
   image:
     repository: smartpark-serving
     tag: ""
