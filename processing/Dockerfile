@@ -47,6 +47,6 @@ ENV PYTHONUNBUFFERED=1
 
 # Konfiguration (Broker, S3-Endpoint, Fenstergröße) kommt aus ConfigMap/Secret.
 CMD ["/opt/spark/bin/spark-submit", \
-     "--master", "local[*]", \
+     "--master", "local[2]", \
      "--driver-memory", "512m", \
      "streaming_job.py"]

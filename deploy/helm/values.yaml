@@ -78,7 +78,7 @@ minio:
 
 # ----------------------------------------------------------- Processing
 spark:
-  enabled: false
+  enabled: true
   image:
     repository: smartpark-processing
     tag: ""                # von Skaffold injiziert

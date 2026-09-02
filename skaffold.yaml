@@ -12,6 +12,10 @@ build:
       context: producer
       docker:
         dockerfile: Dockerfile
+    - image: ghcr.io/cmc197/smartpark-processing
+      context: processing
+      docker:
+        dockerfile: Dockerfile
   local:
     push: true
     useBuildkit: false
@@ -29,6 +33,8 @@ manifests:
         setValueTemplates:
           producer.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_producer}}"
           producer.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_producer}}"
+          spark.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_processing}}"
+          spark.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_processing}}"
 
 deploy:
   helm: {}
