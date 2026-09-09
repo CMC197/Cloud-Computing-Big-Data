@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmartPark</title>
+    <!--
+      Laufzeit-Konfiguration. Im Cluster wird /config.js per ConfigMap
+      gemountet und setzt window.__SMARTPARK_CONFIG__ = { apiUrl: "..." }.
+      Lokal existiert die Datei nicht -> Fallback in src/api/config.js greift.
+    -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
