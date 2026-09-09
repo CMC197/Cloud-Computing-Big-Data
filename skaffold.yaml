@@ -20,6 +20,10 @@ build:
       context: serving
       docker:
         dockerfile: Dockerfile
+    - image: ghcr.io/cmc197/smartpark-ui
+      context: ui
+      docker:
+        dockerfile: Dockerfile
   local:
     push: true
     useBuildkit: false
@@ -41,6 +45,8 @@ manifests:
           spark.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_processing}}"
           api.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_serving}}"
           api.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_serving}}"
+          ui.image.repository: "{{.IMAGE_REPO_ghcr_io_cmc197_smartpark_ui}}"
+          ui.image.tag: "{{.IMAGE_TAG_ghcr_io_cmc197_smartpark_ui}}"
 
 deploy:
   helm: {}

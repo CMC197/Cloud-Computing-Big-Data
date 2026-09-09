@@ -1,0 +1,88 @@
+{{- if .Values.ui.enabled }}
+# =====================================================================
+# AP4 — User-facing UI (React/Vite -> Nginx)
+# ConfigMap liefert die Laufzeit-API-URL (config.js), damit sie NICHT ins
+# Image gebacken wird. Deployment + Service wie bei den anderen Komponenten.
+# =====================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-ui-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Release.Name }}-ui
+data:
+  # Wird nach /usr/share/nginx/html/config.js gemountet und im Frontend
+  # ueber window.__SMARTPARK_CONFIG__ gelesen. Host anpassen (Ingress/IPv4).
+  config.js: |
+    window.__SMARTPARK_CONFIG__ = {
+      apiUrl: "{{ .Values.ui.apiUrl }}"
+    };
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ui
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Release.Name }}-ui
+spec:
+  replicas: {{ .Values.ui.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-ui
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-ui
+      annotations:
+        # erzwingt Rollout, wenn sich die config.js aendert
+        checksum/config: {{ .Values.ui.apiUrl | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101          # nginx-user im Alpine-Image
+      containers:
+        - name: ui
+          image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: runtime-config
+              mountPath: /usr/share/nginx/html/config.js
+              subPath: config.js
+          resources:
+{{ toYaml .Values.ui.resources | indent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: runtime-config
+          configMap:
+            name: {{ .Release.Name }}-ui-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ui
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Release.Name }}-ui
+spec:
+  type: {{ .Values.ui.service.type | default "ClusterIP" }}
+  selector:
+    app: {{ .Release.Name }}-ui
+  ports:
+    - port: {{ .Values.ui.service.port | default 8080 }}
+      targetPort: 8080
+{{- end }}
