@@ -352,21 +352,101 @@ hält den Job am Leben, solange mindestens ein Stream läuft.
 
 ## 10. Wesentliche Codeabschnitte
 
-<!-- Teil der 10 P. "Reproduzierbarkeit und Struktur"
-     ⚠️ RELATIVE Pfade verwenden — die Links müssen in der entpackten ZIP
-     funktionieren, nicht nur auf GitHub. Je Eintrag ein Satz. -->
+Verweise auf die zentralen Stellen im Repository, je mit einer knappen Erklärung,
+was dort passiert und warum es so gelöst ist. Die Links zeigen auf einen festen
+Commit-Stand, sind also stabil.
 
-| Was | Datei | Was dort passiert |
-|---|---|---|
-| Ingestion | [`producer/simulator.py`](producer/simulator.py) | `TODO` |
-| Processing | [`processing/streaming_job.py`](processing/streaming_job.py) | `TODO` |
-| Storage-Sink | `TODO` | `TODO` |
-| Serving-API | [`serving/api.py`](serving/api.py) | `TODO` |
-| UI | `TODO` | `TODO` |
-| Helm-Chart | [`deploy/helm/`](deploy/helm/) | `TODO` |
-| Provisioning | [`ansible/deploy.yaml`](ansible/deploy.yaml) | `TODO` |
+### Ingestion — Producer
 
----
+- [`producer/simulator.py`, Z. 62–68](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/producer/simulator.py#L62-L68)
+  — erzeugt fortlaufend synthetische Belegungs-Events und schreibt sie mit
+  `key=zone_id` nach Kafka; der Key steuert die Partitionierung, sodass alle
+  Events einer Zone garantiert auf derselben Partition und damit in korrekter
+  Reihenfolge landen.
+- [`producer/simulator.py`, Z. 18 + 52](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/producer/simulator.py#L18)
+  — die Sende-Rate ist über die Umgebungsvariable `EVENT_RATE` (Default 10/s)
+  steuerbar und bestimmt das Sende-Intervall; sie ist die Stellschraube, an der
+  im Skalierungs-Nachweis (§8) gedreht wird.
+
+### Stream Processing — Spark
+
+- [`processing/streaming_job.py`, Z. 82–95](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/processing/streaming_job.py#L82-L95)
+  — liest den Kafka-Topic, parst den JSON-Payload gegen ein explizites Schema
+  und setzt sofort den Watermark auf `event_ts`; dieser eine `events`-Strom ist
+  die gemeinsame Quelle aller drei Sinks (Kappa: ein Verarbeitungspfad).
+- [`processing/streaming_job.py`, Z. 104–126](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/processing/streaming_job.py#L104-L126)
+  — die Kern-Transformation: aggregiert den Strom in 1-Minuten-Fenstern je Zone
+  (Anzahl belegt/frei) und schreibt das Ergebnis als Delta-Tabelle
+  `gold/zone_availability`.
+- [`processing/streaming_job.py`, Z. 52–74](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/processing/streaming_job.py#L52-L74)
+  — Stateful Processing: bestimmt per `foreachBatch` und Fensterfunktion das
+  jüngste Event je Bucht und schreibt es per Delta-`MERGE` (Upsert) in
+  `gold/bay_current`, sodass dort dauerhaft genau eine aktuelle Zeile pro Bucht
+  steht — ohne die Rohhistorie neu scannen zu müssen.
+- [`processing/streaming_job.py`, Z. 97–102](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/processing/streaming_job.py#L97-L102)
+  — schreibt jedes Event unverändert und append-only in `bronze/parking_events`;
+  diese Rohschicht ist die Wahrheit, aus der sich Gold und bay_current jederzeit
+  neu berechnen lassen (Reprocessing).
+
+### Serving — API
+
+- [`serving/api.py`, Z. 39–52](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/serving/api.py#L39-L52)
+  — öffnet eine DuckDB-Verbindung, die Delta-Tabellen über `delta_scan` aus
+  MinIO liest; `delta_scan` liest nur die aktuell gültige Tabellenversion statt
+  aller historischen Parquet-Dateien, was Abfragen schnell und speicherschonend
+  hält (entscheidend auf der ressourcenknappen VM).
+- [`serving/api.py`, Z. 59–83](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/serving/api.py#L59-L83)
+  — `GET /zones/availability` liefert die aktuelle Verfügbarkeit je Zone, indem
+  es die kompakte `bay_current`-Tabelle nach Zone gruppiert und belegt/frei
+  zählt; speist die KPI-Kacheln und die Zonenübersicht der UI.
+- [`serving/api.py`, Z. 109–130](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/serving/api.py#L109-L130)
+  — `GET /zones/{zone_id}/bays` liefert den aktuellen Zustand jeder einzelnen
+  Bucht einer Zone; Datenbasis ist ebenfalls `bay_current`, daher ohne teuren
+  Scan der Rohschicht.
+- [`serving/api.py`, Z. 133–147](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/serving/api.py#L133-L147)
+  — `POST /events` nimmt ein Event der UI entgegen und produziert es mit
+  `key=zone_id` nach Kafka; damit speist die UI als Datenlieferant echte Events
+  in dieselbe Pipeline wie der Producer und schließt so den Kreis.
+- [`serving/api.py`, Z. 31–37](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/serving/api.py#L31-L37)
+  — aktiviert CORS, ohne das der Browser die cross-origin-Aufrufe der UI an die
+  API blockieren würde (die UI läuft auf einem anderen Port/Origin als die API).
+
+### User-facing UI
+
+- [`ui/src/api/client.js`, Z. 24–33](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/ui/src/api/client.js#L24-L33)
+  — kapselt alle Backend-Aufrufe an einer Stelle (`getAvailability`, `getBays`
+  für die Anzeige, `postEvent` für den Datenlieferanten); alle Komponenten
+  nutzen ausschließlich diese Funktionen, wodurch die Anbindung an die Pipeline
+  zentral und austauschbar bleibt.
+- [`ui/src/api/config.js`, Z. 15–19](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/ui/src/api/config.js#L15-L19)
+  — löst die API-URL zur Laufzeit auf (ConfigMap → ENV → Fallback), sodass die
+  Adresse **nicht** ins Image gebacken ist und dasselbe Container-Image ohne
+  Neubau in verschiedenen Umgebungen läuft.
+- [`ui/src/components/EventInjector.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/ui/src/components/EventInjector.jsx)
+  — Rolle A (Datenlieferant): Panel, über das man gezielt oder als Stoß mehrere
+  Events erzeugt und per `POST /events` in die Pipeline einspeist.
+- [`ui/src/components/ZoneGrid.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/ui/src/components/ZoneGrid.jsx)
+  und
+  [`BayGrid.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/ui/src/components/BayGrid.jsx)
+  — Rolle B (Anzeige): die Zonenübersicht mit Belegungsampel und das
+  Bucht-Raster, das den Live-Zustand jeder einzelnen Parkbucht farbcodiert zeigt.
+
+### Manifeste / Deployment
+
+- [`deploy/helm/templates/`](https://github.com/CMC197/Cloud-Computing-Big-Data/tree/f44776b/deploy/helm/templates)
+  — ein Helm-Template je Komponente; hier steckt die Abbildung auf
+  Workload-Typen: `kafka.yaml` als StatefulSet mit PVC, die übrigen als
+  stateless Deployments, und `ui.yaml` inkl. ConfigMap, die `config.js` mit der
+  API-URL zur Laufzeit einhängt.
+- [`deploy/helm/values.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/deploy/helm/values.yaml)
+  — die eine zentrale Konfigurationsdatei für alle Komponenten (Images,
+  Replica-Zahlen, Resource-Requests/Limits, Service-Typen, `ui.apiUrl`); trennt
+  Konfiguration sauber vom Code.
+- [`skaffold.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/f44776b/skaffold.yaml)
+  — der reproduzierbare Deploy-Weg: `skaffold run` baut alle vier Images, pusht
+  sie nach GHCR und installiert bzw. aktualisiert das Helm-Chart im Cluster in
+  einem einzigen Schritt.
+
 
 ## 11. Screenshots und Nachweise
 
