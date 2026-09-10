@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { getAvailability, getHistory, getBays, getHealth } from "./api/client.js";
+import { getAvailability, getBays, getHealth } from "./api/client.js";
 import { USE_MOCK, API_URL } from "./api/config.js";
 import EventInjector from "./components/EventInjector.jsx";
 import ZoneGrid from "./components/ZoneGrid.jsx";
-import TrendChart from "./components/TrendChart.jsx";
 import KpiHeader from "./components/KpiHeader.jsx";
 import BayGrid from "./components/BayGrid.jsx";
 
@@ -12,7 +11,6 @@ const POLL_MS = 3000;
 export default function App() {
   const [zones, setZones] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [history, setHistory] = useState([]);
   const [bays, setBays] = useState([]);
   const [health, setHealth] = useState("?");
   const [error, setError] = useState(null);
@@ -31,12 +29,9 @@ export default function App() {
   const refreshZoneDetail = useCallback(async (zid) => {
     if (!zid) return;
     try {
-      const [h, b] = await Promise.all([getHistory(zid), getBays(zid)]);
-      setHistory(h.points ?? []);
+      const b = await getBays(zid);
       setBays(b.bays ?? []);
     } catch {
-      // Detail-Routen evtl. noch nicht implementiert (history/bays) -> leer lassen
-      setHistory([]);
       setBays([]);
     }
   }, []);
@@ -87,9 +82,6 @@ export default function App() {
         <div className="col wide">
           <section className="panel">
             <BayGrid zoneId={selected} bays={bays} />
-          </section>
-          <section className="panel">
-            <TrendChart zoneId={selected} points={history} />
           </section>
         </div>
       </main>
