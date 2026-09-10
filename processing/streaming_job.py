@@ -1,10 +1,12 @@
 """AP2 — Spark Structured Streaming Job.
-Kafka (Source) -> Watermark/Windowing -> Delta auf MinIO (Bronze + Gold).
+Kafka (Source) -> Watermark/Windowing -> Delta auf MinIO (Bronze + Gold + bay_current).
 """
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, window, count, sum as _sum, when
+from pyspark.sql.functions import col, from_json, window, count, sum as _sum, when, row_number
+from pyspark.sql.window import Window
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType
+from delta.tables import DeltaTable
 
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "smartpark-kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "parking-events")
@@ -18,6 +20,7 @@ CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "/tmp/checkpoints")
 
 BRONZE_PATH = f"s3a://{BUCKET}/bronze/parking_events"
 GOLD_PATH = f"s3a://{BUCKET}/gold/zone_availability"
+BAY_CURRENT_PATH = f"s3a://{BUCKET}/gold/bay_current"
 
 schema = StructType([
     StructField("event_id", StringType()),
@@ -44,6 +47,31 @@ def build_spark():
         .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
         .getOrCreate()
     )
+
+
+def upsert_bay_current(batch_df, batch_id):
+    """Schreibt pro bay_id das juengste Event dieses Batches als aktuellen
+    Zustand nach gold/bay_current (Delta-Merge / Upsert)."""
+    if batch_df.rdd.isEmpty():
+        return
+    w = Window.partitionBy("bay_id").orderBy(col("event_ts").desc())
+    latest = (
+        batch_df.withColumn("rn", row_number().over(w))
+        .filter(col("rn") == 1)
+        .select("bay_id", "zone_id", "state", "event_ts")
+    )
+    spark = batch_df.sparkSession
+    if DeltaTable.isDeltaTable(spark, BAY_CURRENT_PATH):
+        tgt = DeltaTable.forPath(spark, BAY_CURRENT_PATH)
+        (
+            tgt.alias("t")
+            .merge(latest.alias("s"), "t.bay_id = s.bay_id")
+            .whenMatchedUpdateAll(condition="s.event_ts > t.event_ts")
+            .whenNotMatchedInsertAll()
+            .execute()
+        )
+    else:
+        latest.write.format("delta").mode("overwrite").save(BAY_CURRENT_PATH)
 
 
 def main():
@@ -95,6 +123,14 @@ def main():
         .outputMode("append")
         .option("checkpointLocation", CHECKPOINT_DIR + "/gold")
         .start(GOLD_PATH)
+    )
+
+    bay_current_query = (
+        events.writeStream
+        .foreachBatch(upsert_bay_current)
+        .outputMode("append")
+        .option("checkpointLocation", CHECKPOINT_DIR + "/bay_current")
+        .start()
     )
 
     spark.streams.awaitAnyTermination()
