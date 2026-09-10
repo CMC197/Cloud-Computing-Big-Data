@@ -127,35 +127,110 @@ deklarativ deployt per Helm auf einem k3s-Cluster der DHBWCloud.
 
 ## 5. Processing-Logik
 
-<!-- 20 P. · Owner: AP2
-     Hier liegen 20 von 100 Punkten. Mindestens eine nicht-triviale
-     Transformation, besser zwei bis drei. Jede muss im Code auffindbar sein
-     (§10 verlinken!) und Windowing/State/Late Data adressieren. -->
+Die gesamte Stream-Verarbeitung ist ein einziger Spark-Structured-Streaming-Job:
+[`processing/streaming_job.py`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py).
+Eine Kafka-Quelle speist **drei parallele Sinks**, die je eine eigene
+Transformation und Ausgabeschicht bedienen. Damit deckt der Job mehr als die
+geforderte eine nicht-triviale Transformation ab: eine zeitfenster­basierte
+Aggregation, eine zustandsbehaftete Upsert-Logik (Stateful Processing) und die
+rohe Persistenz — alle drei aus demselben, per Watermark begrenzten Event-Strom.
 
-### 5.1 Transformation 1 — `TODO`
+### 5.1 Gemeinsame Quelle: Kafka → typisierter Event-Strom mit Watermark
 
-`TODO`
+Der Job liest den Kafka-Topic `parking-events`
+([Zeilen 82–88](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L82-L88)),
+parst den JSON-Payload gegen ein explizites Schema
+([Zeilen 25–32](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L25-L32),
+[90–95](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L90-L95))
+und setzt direkt danach einen **Watermark von 2 Minuten** auf das Feld
+`event_ts`
+([Zeile 94](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L94)).
+Der so typisierte, watermark-behaftete `events`-DataFrame ist die gemeinsame
+Grundlage aller drei nachgelagerten Sinks.
 
-### 5.2 Transformation 2 — `TODO`
+### 5.2 Transformation 1 — Windowed Aggregation je Zone (Gold)
 
-`TODO`
+Der zentrale analytische Sink aggregiert den Strom in **1-Minuten-Zeitfenstern
+je Zone**
+([Zeilen 104–119](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L104-L119)):
+`groupBy(window(event_ts, "1 minute"), zone_id)` zählt pro Fenster die
+Gesamtzahl der Events (`events_total`) sowie — über bedingte Summen
+(`sum(when(state = 'OCCUPIED'))` bzw. `'FREE'`) — die belegten und freien
+Buchten. Das Ergebnis wird als Delta-Tabelle `gold/zone_availability`
+geschrieben
+([Zeilen 121–126](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L121-L126)).
+Das ist die klassische, nicht-triviale Zeitfenster-Aggregation: aus einem
+unendlichen Strom entstehen abgeschlossene, pro Zeitfenster verdichtete
+Kennzahlen.
 
-### 5.3 Transformation 3 — `TODO`
+### 5.3 Transformation 2 — Stateful Upsert je Bucht (bay_current)
 
-`TODO`
+Für die Live-Ansicht des **aktuellen Zustands jeder einzelnen Parkbucht** genügt
+die Gold-Aggregation nicht (dort ist die `bay_id` wegaggregiert). Deshalb pflegt
+ein zweiter, zustandsbehafteter Sink eine kompakte Tabelle `gold/bay_current`
+mit genau **einer Zeile je Bucht** — dem jeweils jüngsten Zustand.
 
-### 5.4 Windowing, State und Watermarks
+Die Logik steckt in `upsert_bay_current(batch_df, batch_id)`
+([Zeilen 52–74](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L52-L74)),
+angebunden über `foreachBatch`
+([Zeilen 128–134](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L128-L134)).
+Pro Micro-Batch wird per Fensterfunktion
+`row_number() OVER (PARTITION BY bay_id ORDER BY event_ts DESC)` das neueste
+Event je Bucht bestimmt
+([Zeilen 57–62](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L57-L62))
+und anschließend per **Delta-`MERGE`** in die Zieltabelle geschrieben
+([Zeilen 64–74](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L64-L74)):
+vorhandene Buchten werden aktualisiert (nur wenn das neue Event tatsächlich
+jünger ist, `condition="s.event_ts > t.event_ts"`), neue Buchten eingefügt
+(`whenNotMatchedInsertAll`). Beim allerersten Lauf, wenn die Tabelle noch nicht
+existiert, wird sie initial geschrieben
+([Zeilen 73–74](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L73-L74)).
 
-`TODO`
+Das ist Stateful Processing im eigentlichen Sinn: Der aktuelle Zustand jeder
+Bucht wird über Batch-Grenzen hinweg in einer Delta-Tabelle gehalten und
+inkrementell fortgeschrieben, statt bei jeder Abfrage neu aus der Rohhistorie
+berechnet zu werden. Der Nebeneffekt ist eine winzige, konstant große Tabelle
+(≈ Anzahl Buchten), die das Serving ohne teure Scans über die wachsende
+Rohschicht bedienen kann.
 
-### 5.5 Umgang mit Late Data
+### 5.4 Transformation 3 — Rohpersistenz (Bronze)
 
-<!-- ⚠️ Explizit dokumentieren: Watermark-Länge, was passiert mit zu späten
-     Events (verwerfen / separate Ablage), State-Timeout beim Session-Join. -->
+Parallel schreibt ein dritter Sink jedes Event unverändert und append-only in
+die Delta-Tabelle `bronze/parking_events`
+([Zeilen 97–102](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L97-L102)).
+Das ist bewusst keine Transformation, sondern die verlässliche Rohschicht des
+Medaillon-Modells: Sie erlaubt, Gold und bay_current bei Bedarf vollständig neu
+zu berechnen (Reprocessing).
 
-`TODO`
+### 5.5 Windowing, State und Late Data
 
----
+- **Windowing:** Tumbling Windows von 1 Minute auf `event_ts` (Event-Time, nicht
+  Processing-Time), konfigurierbar über `WINDOW_DURATION`
+  ([Zeile 17](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L17)).
+- **State:** Zwei Formen. Implizit im Windowing (Spark hält die offenen Fenster
+  im State-Store); explizit und dauerhaft in der `bay_current`-Delta-Tabelle
+  über den Merge.
+- **Late Data:** Der Watermark von 2 Minuten
+  ([Zeile 18](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L18),
+  [94](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L94))
+  legt fest, wie lange auf verspätete Events gewartet wird, bevor ein
+  Zeitfenster als abgeschlossen gilt und aus dem State entfernt wird. Events,
+  die später als 2 Minuten nach ihrem Fenster eintreffen, werden verworfen.
+  Damit bleibt der State-Store beschränkt (kein unbegrenztes Wachstum) und die
+  Aggregation deterministisch abschließbar.
+
+### 5.6 Warum drei getrennte Sinks statt einem
+
+Bronze (roh), Gold (aggregiert) und bay_current (aktueller Zustand) haben
+unterschiedliche Zugriffs- und Aktualisierungsmuster. Die Trennung entkoppelt
+sie: Jeder Sink hat einen eigenen `checkpointLocation`
+([Zeilen 100](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L100),
+[124](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L124),
+[132](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L132))
+und kann unabhängig wiederanlaufen; `awaitAnyTermination`
+([Zeile 136](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py#L136))
+hält den Job am Leben, solange mindestens ein Stream läuft.
+
 
 ## 6. Speicherkonzept
 
