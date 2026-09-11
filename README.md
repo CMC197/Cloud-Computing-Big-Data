@@ -41,39 +41,82 @@ deklarativ deployt per Helm auf einem k3s-Cluster der DHBWCloud.
 
 ## 1. Use Case und Motivation
 
-<!-- 10 P. (zusammen mit §2) · Owner: <Name> · Meilenstein: M6
-     Muss enthalten: Problem, Datenquelle, warum das ein Big-Data-Problem ist.
-     Argumentationskern: nicht "viele Daten", sondern Velocity + Volume + Variety
-     zusammen erzwingen eine Streaming-Lakehouse-Architektur. -->
-
 ### 1.1 Problem
 
-`TODO`
+In Innenstädten entfällt ein erheblicher Teil des Verkehrs auf die Suche nach
+freien Parkplätzen — Fahrzeuge, die im Kreis fahren, erzeugen Stau, Emissionen
+und Frust. Wer in Echtzeit wüsste, welche Parkbuchten gerade frei sind, könnte
+gezielt angefahren werden. SmartPark adressiert genau das: ein System, das den
+Belegungszustand einzelner Parkbuchten kontinuierlich erfasst, verarbeitet und
+sowohl auf Zonen- als auch auf Einzelbucht-Ebene in Echtzeit verfügbar macht.
+
+Der Kern des Problems ist die **Echtzeit-Natur**: Eine Belegungsinformation ist
+nur so lange wertvoll, wie sie aktuell ist. Eine Bucht, die vor zehn Minuten
+frei war, hilft niemandem. Das System muss den Zustand also nicht periodisch
+(Batch), sondern **fortlaufend** aktuell halten — was direkt zu einer
+Streaming-Architektur führt.
 
 ### 1.2 Datenquelle
 
-`TODO`
+Datenquelle sind Belegungs-Events einzelner Parkbuchten: Jede Zustandsänderung
+(`FREE` ↔ `OCCUPIED`) erzeugt ein Event mit Bucht-ID, Zonen-ID, Zustand und
+Zeitstempel. In einem realen Ausbau kämen diese von Sensoren pro Bucht (z. B.
+Boden-Magnetsensoren oder Kamera-basierte Erkennung).
+
+Da für den Prototyp keine echte Sensorik zur Verfügung steht, erzeugt ein
+**Event-Simulator** (`producer/simulator.py`) einen synthetischen, aber
+realistisch geformten Event-Strom mit konfigurierbarer Rate — für die
+Demonstration der Pipeline gleichwertig zu echten Sensordaten, da das System
+ohnehin nur den Event-Strom sieht, nicht dessen Ursprung.
 
 ### 1.3 Warum ist das ein Big-Data-Problem?
 
-`TODO`
+Entscheidend ist nicht das *Datenvolumen* des Prototyps (das ist bewusst klein),
+sondern dass die **Charakteristik** des Problems Big-Data-Technologie erzwingt,
+sobald man es realistisch denkt:
 
----
+- **Velocity** ist der Kern: Ein kontinuierlicher, nie endender Event-Strom muss
+  in Echtzeit verarbeitet werden. Ein Batch-Ansatz (z. B. stündliche
+  Auswertung) würde das Problem — aktuelle Verfügbarkeit — grundsätzlich
+  verfehlen. Das erzwingt Stream Processing (Kafka + Spark Structured
+  Streaming).
+- **Volume** skaliert mit der Fläche: Der Prototyp bildet 5 Zonen mit je ~20
+  Buchten ab. Eine ganze Stadt hätte leicht Zehntausende Buchten, die jeweils
+  mehrfach pro Stunde ihren Zustand ändern — ein Datenaufkommen, das eine
+  einzelne Datenbank an ihre Grenzen brächte und eine horizontal skalierbare,
+  entkoppelte Architektur (Kafka-Partitionen, verteiltes Processing,
+  Objektspeicher-Lakehouse) verlangt.
+- **Variety** ist im Prototyp bewusst noch nicht ausgeprägt (eine strukturierte
+  Event-Quelle), würde im städtischen Ausbau aber unvermeidlich: Kamera-Bilder
+  zur Plausibilisierung, Wetter- und Kalenderdaten zur Nachfrage-Prognose,
+  Zahlungs-/Ticketing-Daten aus Automaten — strukturell sehr unterschiedliche
+  Quellen, deren Zusammenführung ein Lakehouse (schema-flexibel, mehrere
+  Schichten) nahelegt (siehe Ausblick §12.2).
+
+Zusammengenommen erzwingen **Velocity + (potenzielles) Volume + (perspektivische)
+Variety** genau die gewählte Streaming-Lakehouse-Architektur (§3, §4). Der
+Prototyp demonstriert diese Architektur an bewusst kleinem Datenvolumen — die
+Architektur selbst ist aber die, die das Problem in realer Größe verlangt.
 
 ## 2. Datencharakteristik
 
-<!-- Teil der 10 P. aus §1 · Owner: <Name>
-     ⚠️ Die V's brauchen KONKRETE ZAHLEN, keine Adjektive.
-     Prototyp-Werte UND Zielbild angeben. -->
+Die folgende Tabelle unterscheidet bewusst zwischen den **Prototyp-Werten**
+(was das abgegebene System tatsächlich verarbeitet) und dem **Zielbild** (ein
+realistischer städtischer Ausbau) — denn die Big-Data-Eigenschaft ergibt sich
+aus der Charakteristik des Problems, nicht aus dem Demonstrations-Volumen.
 
 | V | Ausprägung bei SmartPark | Konkrete Zahlen (Prototyp → Zielbild) |
 |---|---|---|
-| **Volume** | `TODO` | `TODO` |
-| **Velocity** | `TODO` | `TODO` |
-| **Variety** | `TODO` | `TODO` |
-| *(Veracity)* | `TODO` | `TODO` |
+| **Velocity** | Kontinuierlicher Event-Strom, in Echtzeit fenster-aggregiert und pro Bucht zustandsgeführt | Prototyp: ~13 Events/s (1 Producer), im Test auf ~37,5 Events/s skaliert (§8.4) → Zielbild: Zehntausende Buchten mit mehreren Zustandswechseln/Stunde ⇒ mehrere tausend Events/s |
+| **Volume** | Append-only Rohschicht (Bronze) wächst unbegrenzt; aggregierte Schichten (Gold, bay_current) bleiben kompakt | Prototyp: 5 Zonen × ~20 Buchten = ~100 Buchten → Zielbild: stadtweit 10.000+ Buchten, kontinuierlich über Monate ⇒ Rohdaten im TB-Bereich |
+| **Variety** | Aktuell eine strukturierte JSON-Event-Quelle; im Ausbau mehrere strukturell unterschiedliche Quellen | Prototyp: 1 Quelle (Belegungs-Events) → Zielbild: + Kameradaten (unstrukturiert/binär), Wetter/Kalender (extern, batch), Ticketing (strukturiert, anderes Schema) |
+| *(Veracity)* | Sensordaten sind in der Realität fehlerbehaftet (Doppelmeldungen, Ausfälle); der Watermark behandelt verspätete Events, Delta sichert konsistente Schreibvorgänge | Prototyp: synthetische, saubere Events → Zielbild: Plausibilisierung z. B. durch Kamera-Abgleich, Umgang mit Sensor-Ausfällen |
 
----
+Die entscheidende Aussage: Der Prototyp arbeitet mit kleinem Volumen und einer
+Quelle, ist aber architektonisch genau so gebaut, dass er die Velocity, das
+Volume und die Variety des realen Problems tragen würde — die Skalierung ist
+eine Frage der Ressourcen (§8, §12), nicht des Architektur-Umbaus.
+
 
 ## 3. Architekturentscheidung: Kappa vs. Lambda
 
