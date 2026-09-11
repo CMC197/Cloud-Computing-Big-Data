@@ -289,39 +289,101 @@ hält den Job am Leben, solange mindestens ein Stream läuft.
 
 ## 8. Kubernetes-Deployment
 
-<!-- 15 P. · Owner: AP5
-     Workload-Typen begründen (StatefulSet vs. Deployment), Config über
-     ConfigMap/Secret, Persistenz über PVC, und Skalierung ZEIGEN (Screenshots
-     in §11 verlinken). -->
+Alle sechs Komponenten sind über ein einziges Helm-Chart
+([`deploy/helm/`](https://github.com/CMC197/Cloud-Computing-Big-Data/tree/62a3e86/deploy/helm))
+deklarativ auf k3s deployt. Konfiguration lebt zentral in
+[`values.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/values.yaml),
+sodass jede Komponente einzeln (de-)aktiviert, skaliert und mit
+Ressourcen-Grenzen versehen werden kann, ohne Templates anzufassen.
 
-### 8.1 Abbildung der Komponenten auf Workloads
+### 8.1 Abbildung auf Workload-Typen
 
-| Komponente | Workload-Typ | Begründung | Replicas | Requests / Limits |
-|---|---|---|---|---|
-| Kafka | `TODO` | | | |
-| MinIO | `TODO` | | | |
-| Spark | `TODO` | | | |
-| Serving-API | `TODO` | | | |
-| Producer | `TODO` | | | |
-| UI | `TODO` | | | |
+| Komponente | Workload | Begründung |
+|---|---|---|
+| Kafka | **StatefulSet** ([`kafka.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/kafka.yaml)) | braucht eine stabile Netzwerk-Identität und ein eigenes, dauerhaftes Volume je Broker — genau das liefert ein StatefulSet, ein Deployment nicht. |
+| MinIO | StatefulSet-artig betrieben, PVC-gebunden | hält die Lakehouse-Daten; ebenfalls zustandsbehaftet. |
+| Producer | **Deployment** ([`producer.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/producer.yaml)) | zustandslos, beliebig viele austauschbare Replicas — Deployment ist der richtige Typ. |
+| Spark-Processing | **Deployment** ([`processing.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/processing.yaml)) | ein laufender Streaming-Job; State liegt nicht im Pod, sondern in den Delta-Checkpoints/-Tabellen auf MinIO. |
+| Serving-API | **Deployment**, 2 Replicas ([`serving.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/serving.yaml)) | zustandslos, liest bei jeder Anfrage frisch aus MinIO — mehrere Replicas ohne Koordinationsaufwand möglich. |
+| UI | **Deployment** ([`ui.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/ui.yaml)) | statisches Nginx-Frontend, zustandslos. |
 
-### 8.2 Konfiguration (ConfigMaps und Secrets)
+### 8.2 Konfiguration und Persistenz
 
-`TODO`
+- **ConfigMaps:** Die UI erhält ihre API-Adresse zur Laufzeit über eine
+  ConfigMap, die `config.js` nach `/usr/share/nginx/html/` mountet
+  ([`ui.yaml`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/62a3e86/deploy/helm/templates/ui.yaml)) —
+  die URL ist damit nicht ins Container-Image gebacken.
+- **Secrets:** Die MinIO-Zugangsdaten (Access-/Secret-Key) werden Serving und
+  Processing als Kubernetes-Secret injiziert, nicht als Klartext-Env in den
+  Templates.
+- **PVCs:** Kafka und MinIO sind an persistente Volumes gebunden
+  (`local-path`-StorageClass, je 5 Gi) — Broker-Log bzw. Lakehouse-Daten
+  überleben Pod-Neustarts. Die zustandslosen Komponenten (Producer, Processing,
+  Serving, UI) haben bewusst kein PVC.
 
-### 8.3 Persistenz (PVCs)
+### 8.3 Deklarativität und Skalierbarkeit
 
-`TODO`
+Jede Komponente hat in `values.yaml` einen eigenen `replicas`-Wert; Hoch- oder
+Runterskalieren ist ein deklarativer Ein-Zeiler
+(`kubectl scale deploy/<name> --replicas=N` oder Anpassung von `values.yaml`
+und erneutem `helm upgrade`/`skaffold run`) — kein Eingriff in Code oder
+Templates nötig.
 
-### 8.4 Skalierbarkeit
+### 8.4 Skalierungsnachweis
 
-<!-- ⚠️ Rubric-Kernpunkt: "muss darauf ausgelegt sein, in allen Komponenten
-     horizontal zu skalieren und dies soll gezeigt werden."
-     Nachweis = Screenshots vor/nach Last in §11. -->
+Als Nachweis wurde der Producer live von 1 auf 3 Replicas skaliert:
 
-`TODO`
+```
+kubectl -n smartpark scale deploy smartpark-producer --replicas=3
+```
 
----
+Gemessen wurde der Ingest-Durchsatz direkt an den Kafka-Partitions-Offsets des
+Topics `parking-events` (`kafka-get-offsets.sh`), jeweils über ein
+10-Sekunden-Fenster:
+
+| Zustand | Offset-Zuwachs / 10 s | Durchsatz |
+|---|---|---|
+| 1 Replica (vorher) | ~130 Events | ≈ 13 Events/s |
+| 3 Replicas (nachher) | ~375 Events | ≈ 37,5 Events/s |
+
+Der Durchsatz steigt um den Faktor **≈ 2,9** — nahezu linear mit der
+Replica-Zahl. Die parallele Verarbeitung läuft über die drei Partitionen des
+Topics `parking-events` als Parallelitäts-Achse.
+
+**Beobachtung (Partition-Skew):** Da der Producer nach `zone_id` partitioniert
+(Kafka-Key = `zone_id`, siehe §10), verteilen sich die fünf Zonen durch die
+Hash-Partitionierung nur auf zwei der drei Partitionen — die dritte blieb in
+der Messung durchgehend leer. Die Kafka-Partitionierung wurde bewusst nicht auf
+eine höhere Partitionszahl ausgelegt, weil bei fünf Zonen und der gewählten
+Partitionierungsstrategie mehr Partitionen den Skew nicht auflösen würden;
+für eine größere Zonenzahl wäre eine feinere Partitionierung (z. B. nach
+`bay_id`) die naheliegende Anpassung.
+
+**Grenze der Skalierung — bewusst dokumentiert:** Spark (Processing) und Kafka
+wurden *nicht* live mitskaliert. Die VM steht mit 12 GB RAM bereits im
+Normalbetrieb unter Druck — im Betrieb kam es mehrfach zu `OOMKilled`-Ereignissen
+an der Serving-API, sobald DuckDB/Delta-Operationen zusätzlichen Speicher zogen
+(siehe §12). Eine zusätzliche Spark-Executor-Skalierung hätte dieses Risiko
+weiter verschärft. Die Skalierung wurde daher gezielt auf die unkritischste,
+zustandslose Komponente (Producer) beschränkt — ein bewusster Trade-off
+zwischen Nachweis der Skalierbarkeit und Stabilität des Gesamtsystems auf
+begrenzter Hardware, nicht eine technische Unmöglichkeit der Architektur.
+
+**Architektonische Skalierbarkeit von Kafka und Spark:** Beide Komponenten sind
+für horizontale Skalierung ausgelegt, auch wenn dies auf der begrenzten VM nicht
+live demonstriert wurde. Das Topic `parking-events` ist mit **3 Partitionen**
+angelegt — die eingebaute Parallelitäts-Achse für mehr Consumer-Durchsatz; ein
+zusätzlicher Kafka-Broker (`kafka.replicas` > 1 im StatefulSet, aktuell auf 1
+gesetzt) würde diese Partitionen automatisch über mehrere Broker verteilen. Der
+Spark-Job läuft bewusst gedrosselt (`local[2]`, siehe Betriebs­erkenntnisse
+§12), ist aber ebenso für mehr Executor-Parallelität ausgelegt: Spark verteilt
+Kafka-Partitionen automatisch auf verfügbare Executor-Slots, ohne dass der
+Code (`streaming_job.py`) dafür geändert werden müsste. Das Helm-Chart
+unterstützt `replicas > 1` für jede Komponente gleichermaßen — die Auslegung
+ist vorhanden, die Live-Demonstration wurde bewusst auf die unkritischste
+Komponente beschränkt, um die im Betrieb bereits real aufgetretenen
+Ressourcen-Engpässe nicht zu riskieren.
+
 
 ## 9. Deployment-Anleitung
 
