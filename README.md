@@ -852,27 +852,64 @@ Commit-Stand, sind also stabil.
 
 ## 11. Screenshots und Nachweise
 
-<!-- Ersetzt den Funktionstest — die Anwendung wird bei der Bewertung NICHT
-     ausgeführt. Alle Bilder nach docs/screenshots/ und hier einbinden.
-     Laufend sammeln, nicht in Woche 7 rekonstruieren! -->
+Da die Anwendung zur Bewertung nicht ausgeführt wird, ersetzen die folgenden
+Screenshots den Funktionstest. Sie belegen das laufende System (UI, Pods,
+Serving-Output) sowie Beispiel-Outputs der Pipeline und den Skalierungs-Nachweis.
 
-| Nachweis | Status |
-|---|---|
-| UI im Betrieb (Dashboard + Event-Injektor) | ⬜ |
-| Event über die UI einspeisen | ⬜ |
-| `kubectl get pods -n smartpark` | ⬜ |
-| `kubectl get svc,ingress -n smartpark` | ⬜ |
-| `kubectl get hpa` / ScaledObjects | ⬜ |
-| Pods **vor** und **nach** Skalierung | ⬜ |
-| Serving-Output (`curl` API-Response) | ⬜ |
-| Pipeline-Output (Gold-Tabelle / Delta-Query) | ⬜ |
-| Kafka-Topic mit Events | ⬜ |
+### 11.1 User-facing UI im Betrieb
 
-<!-- Einbinden mit:  ![UI im Betrieb](docs/screenshots/ui-dashboard.png) -->
+![SmartPark-Dashboard mit KPIs, Zonen-Übersicht und Bucht-Raster](docs/screenshots/ui_dashboard.png)
 
-`TODO`
+*Live-Dashboard (Rolle B): Das **LIVE**-Badge und `API: ok` oben rechts belegen
+die reale Anbindung an die Pipeline (kein Mockup). Oben die aggregierten KPIs
+(frei/belegt gesamt, Belegungsquote, aktive Zonen), links die Zonen-Übersicht
+mit Belegungs-Ampel, rechts das Bucht-Raster der ausgewählten Zone (grün = frei,
+rot = belegt) — die aus der `bay_current`-Tabelle gespeiste Einzel-Bucht-Ansicht.*
 
----
+![Event-Injektor der UI](docs/screenshots/ui_injektor.png)
+
+*Event-Injektor (Rolle A, Datenlieferant): Über Zone/Bucht/Zustand wird ein
+Event erzeugt und per `POST /events` in die Pipeline eingespeist. Der Log-Eintrag
+unten (`zone-4 / bay-4-0 -> FREE`) bestätigt das gesendete Event.*
+
+![Dashboard mit veränderter Belegung](docs/screenshots/ui_belegung.png)
+
+*Dasselbe Dashboard zu einem anderen Zeitpunkt (33 % statt 48 % Belegung,
+anderer Aktualisierungs-Zeitstempel): Die Anzeige folgt den live verarbeiteten
+Daten — Beleg dafür, dass die Werte tatsächlich aus der laufenden Pipeline
+stammen und sich fortlaufend aktualisieren.*
+
+### 11.2 Cluster-Status und Serving-Output
+
+![kubectl get pods, Kafka-Offsets und Serving-JSON](docs/screenshots/system_pods_offsets_json.png)
+
+*Ein Screenshot, drei Nachweise:*
+- *`kubectl get pods` — alle Komponenten (minio, api ×2, kafka, processing,
+  producer, ui) im Status **Running**.*
+- *Kafka-Offsets des Topics `parking-events` — die stetig steigenden Offsets
+  belegen den kontinuierlichen Event-Strom (Beispiel-Output der Ingestion).*
+- *Serving-Output: die JSON-Antwort von `GET /zones/availability` mit den
+  aggregierten Verfügbarkeiten je Zone (`events_total`, `occupied`, `free`).*
+
+### 11.3 Skalierungs-Nachweis (horizontale Skalierung des Producers)
+
+![Vorher: 1 Producer-Replica mit Offset-Zuwachs](docs/screenshots/scale_vorher.png)
+
+*Ausgangszustand: **1** Producer-Replica. Der Offset-Zuwachs über 10 Sekunden
+(~130 Events) entspricht ca. **13 Events/s**.*
+
+![Hochskalieren des Producers von 1 auf 3 Replicas](docs/screenshots/scale_1zu3.png)
+
+*`kubectl scale deploy smartpark-producer --replicas=3` — der Rollout bringt
+**3** Producer-Pods in den Status Running.*
+
+![Nachher: 3 Producer-Replicas mit höherem Offset-Zuwachs](docs/screenshots/scale_nachher.png)
+
+*Nach der Skalierung: Der Offset-Zuwachs über 10 Sekunden (~375 Events)
+entspricht ca. **37,5 Events/s** — ein Faktor von ~2,9, also nahezu lineare
+horizontale Skalierung über die Kafka-Partitionen als Parallelitäts-Achse
+(Details und Einordnung in §8.4).*
+
 
 ## 12. Grenzen des Prototyps und Ausblick
 
