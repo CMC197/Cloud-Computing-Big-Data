@@ -858,7 +858,7 @@ Serving-Output) sowie Beispiel-Outputs der Pipeline und den Skalierungs-Nachweis
 
 ### 11.1 User-facing UI im Betrieb
 
-![SmartPark-Dashboard mit KPIs, Zonen-Übersicht und Bucht-Raster](docs/screenshots/ui_dashboard.png)
+![SmartPark-Dashboard mit KPIs, Zonen-Übersicht und Bucht-Raster](docs/screenshots/ui_belegung.png)
 
 *Live-Dashboard (Rolle B): Das **LIVE**-Badge und `API: ok` oben rechts belegen
 die reale Anbindung an die Pipeline (kein Mockup). Oben die aggregierten KPIs
@@ -872,7 +872,7 @@ rot = belegt) — die aus der `bay_current`-Tabelle gespeiste Einzel-Bucht-Ansic
 Event erzeugt und per `POST /events` in die Pipeline eingespeist. Der Log-Eintrag
 unten (`zone-4 / bay-4-0 -> FREE`) bestätigt das gesendete Event.*
 
-![Dashboard mit veränderter Belegung](docs/screenshots/ui_belegung.png)
+![Dashboard mit veränderter Belegung](docs/screenshots/ui_dashboard.png)
 
 *Dasselbe Dashboard zu einem anderen Zeitpunkt (33 % statt 48 % Belegung,
 anderer Aktualisierungs-Zeitstempel): Die Anzeige folgt den live verarbeiteten
