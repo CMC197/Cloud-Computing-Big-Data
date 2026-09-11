@@ -174,26 +174,48 @@ aufgetretenen Ressourcenengpässe (§12.1) zeigen.
 
 ## 4. Komponenten und Datenfluss
 
-<!-- Teil der 20 P. aus §3 · Owner: <Name>
-     Jede Technologiewahl BEGRÜNDEN — "haben wir im Kurs gemacht" reicht nicht. -->
-
 ### 4.1 Komponenten und Technologiewahl
 
 | Komponente | Technologie | Begründung |
 |---|---|---|
-| Ingestion | `TODO` | `TODO` |
-| Processing | `TODO` | `TODO` |
-| Storage | `TODO` | `TODO` |
-| Serving-API | `TODO` | `TODO` |
-| Query-Layer | `TODO` | `TODO` |
-| UI | `TODO` | `TODO` |
-| Producer/Simulator | `TODO` | `TODO` |
+| **Ingestion** | Apache Kafka (KRaft-Modus, ohne ZooKeeper) | Standard für ein Streaming-Backbone; entkoppelt Producer und Verarbeitung (Puffer bei Lastspitzen) und liefert mit Partitionen die natürliche Parallelitäts-Achse (§8.4). KRaft spart den separaten ZooKeeper-Prozess — auf der RAM-knappen VM (§12.1) ein relevanter Vorteil. |
+| **Processing** | Apache Spark Structured Streaming (PySpark) | Passt zum Lehrstoff und deckt alle geforderten Streaming-Konzepte nativ ab: Event-Time-Windowing, Watermarks/Late-Data und über `foreachBatch` auch Stateful Upserts (§5). Ein einziger Job bedient drei Sinks — konsistent mit Kappa. |
+| **Storage** | Delta Lake auf MinIO (S3-kompatibel) | Lakehouse statt reiner DB oder nacktem Data Lake: ACID-Writes für mehrere parallele Sinks, Upserts (`MERGE`) für `bay_current`, effizientes Lesen der aktuellen Version via `delta_scan` (§6.2). MinIO entkoppelt Storage von Compute und ist leichter als HDFS (Bonus-Abweichung, §12). |
+| **Serving-API** | FastAPI (Python) | Leichtgewichtiges, asynchrones Web-Framework; stellt die drei Read-Endpunkte und `POST /events` bereit und lässt sich als zustandslose Komponente mit mehreren Replicas betreiben (§8.1). |
+| **Query-Layer** | DuckDB mit `delta_scan()` | Liest die Delta-Tabellen direkt aus MinIO, ohne einen zweiten dauerhaften Spark-Prozess für Lesezugriffe — auf der 12-GB-VM eine bewusst RAM-schonende Wahl (Bonus-Abweichung, §12). `delta_scan` liest nur die aktuelle Tabellenversion (§6.2). |
+| **UI** | React (Vite), als Nginx-Container | Eigenständige, containerisierte Frontend-Komponente auf k8s (kein Mockup). Deckt beide geforderten Rollen ab: Datenlieferant (Event-Injektor) und Anzeige (§7). API-URL kommt zur Laufzeit aus einer ConfigMap, nicht ins Image gebacken. |
+| **Producer/Simulator** | Python + `confluent-kafka` | Erzeugt den synthetischen Event-Strom (mangels echter Parksensoren). Sende-Rate über `EVENT_RATE` steuerbar — die Stellschraube des Skalierungs-Nachweises (§8.4). Partitioniert nach `zone_id`. |
+
+Ergänzend: **k3s** als leichtgewichtige Kubernetes-Distribution, **Helm** als deklaratives Deployment-Paket und **Skaffold** als Build-/Deploy-Werkzeug (`skaffold run` baut alle Images, pusht nach GHCR und installiert das Chart — §8, §9).
 
 ### 4.2 Ende-zu-Ende-Datenfluss
 
-`TODO`
+Der Datenfluss ist ein einziger, geschlossener Kreis (siehe Diagramm §3.4):
 
----
+1. **Erzeugung.** Der **Producer** erzeugt fortlaufend Belegungs-Events
+   (`bay_id`, `zone_id`, `state`, Zeitstempel) und schreibt sie mit
+   `key=zone_id` nach **Kafka** (Topic `parking-events`). Alternativ erzeugt
+   die **UI (Rolle A)** einzelne Events über `POST /events`, die die API
+   ebenfalls nach Kafka produziert — dieselbe Quelle, kein Sonderweg.
+2. **Verarbeitung.** Der **Spark**-Streaming-Job konsumiert den Topic, parst
+   die Events gegen ein festes Schema und setzt einen Watermark (2 min). Aus
+   diesem einen Strom entstehen parallel drei Delta-Tabellen:
+   **Bronze** (jedes Event roh, append-only), **Gold** (1-Minuten-Aggregate je
+   Zone) und **bay_current** (aktueller Zustand je Bucht, via Delta-Merge).
+   Die drei Tabellen werden unabhängig aus dem Strom gebildet — Gold liest
+   *nicht* aus Bronze (§5).
+3. **Speicherung.** Alle drei Tabellen liegen als Delta auf **MinIO** im Bucket
+   `smartpark-lakehouse` (§6).
+4. **Bereitstellung.** Die **FastAPI**-Serving-Schicht liest über **DuckDB /
+   `delta_scan`** aus Gold und bay_current und stellt sie als JSON-Endpunkte
+   bereit (`GET /zones/availability`, `GET /zones/{zone_id}/bays`).
+5. **Anzeige.** Die **UI (Rolle B)** pollt diese Endpunkte und zeigt
+   Zonen-Verfügbarkeit (KPIs) und den Zustand jeder einzelnen Bucht an.
+6. **Kreisschluss.** Ein über die UI (Rolle A) eingespeistes Event durchläuft
+   die komplette Kette (UI → API → Kafka → Spark → Delta → API → UI) und wird
+   in der Anzeige sichtbar — der Nachweis, dass die UI real an die Pipeline
+   angebunden ist (kein Mockup).
+
 
 ## 5. Processing-Logik
 
