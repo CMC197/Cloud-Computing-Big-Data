@@ -234,33 +234,118 @@ hält den Job am Leben, solange mindestens ein Stream läuft.
 
 ## 6. Speicherkonzept
 
-<!-- 10 P. · Owner: AP3
-     Format, Partitionierung, Schema — jeweils BEGRÜNDET.
-     Plus: warum Lakehouse und nicht klassische DB / reiner Data Lake. -->
+### 6.1 Schichten (Medaillon-Architektur)
 
-### 6.1 Schichten (Bronze / Gold)
+Das Lakehouse liegt auf MinIO im Bucket `smartpark-lakehouse` und gliedert
+sich in drei Delta-Tabellen mit unterschiedlichem Zweck (Medaillon-Muster,
+innerhalb des einen Kappa-Streaming-Pfads — siehe §5.6):
 
-`TODO`
+| Schicht | Pfad | Inhalt | Aktualisierung |
+|---|---|---|---|
+| **Bronze** | `bronze/parking_events` | jedes Rohevent unverändert, append-only | fortlaufend, ein Schreibvorgang je Micro-Batch |
+| **Gold** | `gold/zone_availability` | 1-Minuten-Aggregate je Zone (belegt/frei) | fortlaufend, ein neues Fenster je Minute |
+| **bay_current** | `gold/bay_current` | genau eine Zeile je Bucht: deren aktuellster Zustand | fortlaufend per Delta-Merge (Upsert), Zeilenzahl bleibt konstant |
 
-### 6.2 Format und Begründung
+Bronze ist die vollständige, unveränderte Wahrheit — daraus lassen sich Gold
+und bay_current jederzeit neu berechnen (Reprocessing). Gold und bay_current
+sind zwei unterschiedlich geformte, abfrageoptimierte Sichten auf denselben
+Strom: Gold beantwortet „wie war die Belegung je Zeitfenster", bay_current
+beantwortet „wie ist der Zustand *jetzt*, je Bucht" (siehe §5.3).
 
-`TODO`
+### 6.2 Format und Begründung: Delta statt reines Parquet
+
+Alle drei Tabellen liegen im **Delta-Format** (Parquet-Dateien plus
+Transaktionslog `_delta_log`), nicht als nacktes Parquet. Gründe:
+
+- **ACID-Schreibvorgänge:** Mehrere Micro-Batches schreiben fortlaufend in
+  dieselbe Tabelle; Delta garantiert, dass ein lesender Client nie einen
+  halbgeschriebenen Zustand sieht.
+- **Schema-Enforcement:** Verhindert, dass ein fehlerhafter Batch die Tabelle
+  mit einem falschen Schema verunreinigt.
+- **Upsert-Fähigkeit (`MERGE`):** wird von `bay_current` zwingend benötigt
+  (§5.3) — mit reinem Parquet wäre ein Update einzelner Zeilen nicht
+  möglich, ohne die ganze Tabelle neu zu schreiben.
+- **Effizientes Lesen der aktuellen Version (`delta_scan`):** Das
+  Transaktionslog erlaubt der Serving-API, über DuckDBs `delta_scan()` gezielt
+  nur die aktuell gültigen Dateien zu lesen, statt bei jeder Anfrage alle
+  historischen Parquet-Dateien zu öffnen. Das war im Betrieb kein
+  theoretischer Vorteil, sondern eine reale Notwendigkeit: Ein früherer Ansatz
+  über `read_parquet('*.parquet')` musste bei wachsender Dateizahl *alle*
+  jemals geschriebenen Dateiversionen öffnen und wurde nach einigen Stunden
+  Laufzeit so langsam, dass Anfragen in Timeouts liefen (siehe §12). Der
+  Wechsel auf `delta_scan` löste das strukturell, weil nur die aktuelle
+  Tabellenversion gelesen wird.
 
 ### 6.3 Partitionierung und Begründung
 
-`TODO`
+- **Bronze** ist zeitlich implizit partitioniert durch die fortlaufenden
+  Micro-Batch-Schreibvorgänge; eine explizite Partitionierungsspalte ist bei
+  append-only-Rohdaten nicht nötig, da nie gezielt nach Zone gefiltert
+  geschrieben oder gelesen wird.
+- **Gold** ist inhaltlich nach `zone_id` und Zeitfenster (`window_start`)
+  strukturiert — beides Ergebnis des `groupBy(window(...), zone_id)` in der
+  Aggregation (§5.2). Das entspricht dem typischen Zugriffsmuster: „Verlauf
+  einer Zone über die Zeit".
+- **bay_current** ist nach `bay_id` dedupliziert (eine Zeile pro Bucht) und
+  wird von der API zusätzlich nach `zone_id` gefiltert — die Tabelle ist mit
+  wenigen hundert Zeilen so klein, dass eine physische Partitionierung keinen
+  Mehrwert brächte; ihr eigentlicher Effizienzgewinn liegt in der konstanten
+  Größe (siehe 6.1), nicht in der Partitionierung.
+- Auf Kafka-Ebene (vorgelagert) partitioniert der Producer nach `zone_id`
+  (§10) — diese Partitionierung bestimmt indirekt auch die Reihenfolge, in
+  der Events bei Spark ankommen, und damit die Konsistenz der Fenster.
 
 ### 6.4 Schema
 
-| Tabelle | Feld | Typ | Beschreibung |
-|---|---|---|---|
-| `TODO` | | | |
+**Bronze — `bronze/parking_events`**
 
-### 6.5 Warum Lakehouse?
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `event_id` | String | eindeutige Event-ID (UUID) |
+| `bay_id` | String | ID der Parkbucht, z. B. `bay-2-7` |
+| `zone_id` | String | ID der Zone, z. B. `zone-2` — auch Kafka-Partitionierungs-Key |
+| `state` | String | `FREE` oder `OCCUPIED` |
+| `event_ts` | Timestamp | Zeitpunkt des Ereignisses (Event-Time, Basis für Watermark) |
+| `ingest_ts` | Timestamp | Zeitpunkt der Erzeugung im Producer |
 
-`TODO`
+**Gold — `gold/zone_availability`**
 
----
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `window_start` | Timestamp | Beginn des 1-Minuten-Fensters |
+| `window_end` | Timestamp | Ende des Fensters |
+| `zone_id` | String | ID der Zone |
+| `events_total` | Long | Anzahl Events im Fenster |
+| `occupied` | Long | Anzahl `OCCUPIED`-Events im Fenster |
+| `free` | Long | Anzahl `FREE`-Events im Fenster |
+
+**bay_current — `gold/bay_current`**
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `bay_id` | String | ID der Parkbucht (Merge-Schlüssel) |
+| `zone_id` | String | ID der Zone |
+| `state` | String | aktuellster bekannter Zustand (`FREE`/`OCCUPIED`) |
+| `event_ts` | Timestamp | Zeitstempel des zugrundeliegenden, jüngsten Events |
+
+### 6.5 Warum Lakehouse statt klassischer Datenbank oder reinem Data Lake?
+
+Ein reiner Data Lake (nacktes Parquet/CSV ohne Transaktionslog) hätte keine
+sicheren nebenläufigen Schreibvorgänge und keine Upsert-Fähigkeit geboten —
+beides wird von einem Streaming-Job mit drei parallelen Sinks zwingend
+gebraucht (§5). Eine klassische relationale Datenbank hätte umgekehrt die
+Rohdaten-Vollständigkeit (Bronze) und die güns­tige Objektspeicherung großer,
+unstrukturierter Ereignismengen erschwert und wäre für den Betrieb auf einer
+ressourcenbegrenzten VM (kein separat betriebener DB-Server) unpassender
+gewesen. Das Lakehouse-Modell (Delta auf MinIO) verbindet die Skalierbarkeit
+und geringen Betriebskosten eines Objektspeichers mit den
+Konsistenzgarantien einer Datenbank — genau der Mittelweg, den Bronze/Gold/
+bay_current in diesem Projekt brauchen. MinIO als S3-kompatibler
+Objektspeicher entkoppelt zusätzlich Storage von Compute: Der Spark-Job kann
+neu gestartet oder skaliert werden, ohne dass die Daten davon betroffen sind
+— eine bewusste, im Bericht begründete Abweichung von HDFS (siehe Bonus,
+§12).
+
 
 ## 7. User-facing UI
 
