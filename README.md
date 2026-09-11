@@ -615,30 +615,142 @@ Ressourcen-Engpässe nicht zu riskieren.
 
 ## 9. Deployment-Anleitung
 
-<!-- 10 P. · Owner: AP5
-     DHBWCloud-spezifisch! Voraussetzungen nennen: VPN, VM-Flavor, Netzwerk
-     DHBWV6, k3s-Setup, kubeconfig, IPv6-Zugriff.
-     Test: Ein anderes Teammitglied muss den Stack allein hochbekommen. -->
+Ziel: Ein Teammitglied bringt den kompletten Stack allein auf der DHBWCloud-VM
+zum Laufen. Die Anleitung ist bewusst inklusive der real aufgetretenen
+Stolpersteine (siehe auch §12.1) geschrieben.
 
 ### 9.1 Voraussetzungen
 
-`TODO`
+- **Netzzugang:** Die VM ist nur aus dem DHBW-Netz erreichbar. Von außerhalb
+  zunächst per **Cisco Secure Client (VPN)** ins DHBW-Netz einwählen.
+- **VM:** DHBWCloud-Instanz (`mb1.large`: 4 vCPU, 12 GB RAM, 40 GB Root-Disk,
+  Ubuntu 24.04), öffentliche IPv4 `141.72.176.93`.
+- **SSH-Zugang zur VM:** über das beim VM-Setup hinterlegte Keypair
+  (`ssh ubuntu@141.72.176.93`). Der private Schlüssel liegt beim
+  Cluster-Owner. **Weitere Teammitglieder hinzufügen:** die betreffende Person
+  erzeugt sich lokal ein Schlüsselpaar (`ssh-keygen -t ed25519`), und der
+  öffentliche Schlüssel wird auf der VM an `~/.ssh/authorized_keys` des
+  `ubuntu`-Users angehängt.
+- **Lokale Werkzeuge** (auf dem Entwickler-Rechner, unter WSL2/Ubuntu):
+  `kubectl`, `helm`, `skaffold`, `docker`, Node.js 20. Ein GHCR-Login
+  (`docker login ghcr.io`) mit einem Token, das `write:packages` erlaubt.
 
 ### 9.2 Versionen
 
 | Werkzeug | Version |
 |---|---|
-| `TODO` | |
+| Kubernetes (k3s) | v1.x (k3s single-node) |
+| Ubuntu (VM) | 24.04 LTS |
+| Node.js (UI-Build) | 20 |
+| Spark | 3.5.1 (`apache/spark:3.5.1-python3`) |
+| Kafka | 3.9.0 (KRaft-Modus, ohne ZooKeeper) |
+| Delta Lake | 3.1.0 |
+| MinIO | Chart `minio-5.4.0` |
+| DuckDB (Serving) | 1.0.0 |
 
 ### 9.3 Schritt für Schritt
 
-`TODO`
+**1. kubeconfig einrichten** (einmalig, auf dem Entwickler-Rechner).
+Die k3s-kubeconfig von der VM holen und die Server-Adresse auf die öffentliche
+IP zeigen lassen:
 
-### 9.4 Zugriff auf UI und API (IPv6 / Ingress)
+```bash
+# auf der VM liegt sie unter /etc/rancher/k3s/k3s.yaml
+scp ubuntu@141.72.176.93:/etc/rancher/k3s/k3s.yaml ~/.kube/config
+# in ~/.kube/config die server-Zeile anpassen:
+#   server: https://127.0.0.1:6443   ->   server: https://141.72.176.93:6443
+```
 
-`TODO`
+Prüfen, dass die Verbindung steht:
 
----
+```bash
+kubectl get nodes        # Node muss "Ready" sein
+```
+
+**2. MinIO installieren** (einmalig, separates Helm-Release).
+MinIO ist bewusst nicht Teil des `smartpark`-Charts, sondern ein eigenes
+Infrastruktur-Release im selben Namespace:
+
+```bash
+helm repo add minio https://charts.min.io/
+helm install minio minio/minio \
+  --namespace smartpark --create-namespace \
+  --set mode=standalone \
+  --set rootUser=minioadmin --set rootPassword=minioadmin123 \
+  --set persistence.size=5Gi
+```
+
+> Genauen Parametersatz ggf. an die tatsächliche Installation anpassen. Im
+> Bucket `smartpark-lakehouse` legt der Spark-Job Bronze/Gold/bay_current an.
+
+**3. Brücken-Secret für die Lakehouse-Zugangsdaten anlegen** (einmalig).
+Das `smartpark`-Chart erwartet ein Secret `smartpark-minio-secret` mit den Keys
+`accesskey`/`secretkey`. Ohne dieses Secret bleibt der Serving-Pod im Fehler
+`CreateContainerConfigError: secret "smartpark-minio-secret" not found` hängen
+(real aufgetreten, siehe §12.1):
+
+```bash
+kubectl -n smartpark create secret generic smartpark-minio-secret \
+  --from-literal=accesskey=minioadmin \
+  --from-literal=secretkey=minioadmin123
+```
+
+**4. Stack deployen.**
+
+```bash
+cd Cloud-Computing-Big-Data
+skaffold run
+```
+
+`skaffold run` baut alle vier Images (producer, processing, serving, ui),
+pusht sie nach GHCR und installiert/aktualisiert das Helm-Chart.
+
+**5. GHCR-Packages öffentlich stellen** (einmalig, beim ersten Push je Image).
+Neu angelegte GHCR-Packages sind privat; der Cluster kann sie dann nicht ziehen
+(`ErrImagePull`). Auf GitHub jedes Package (`smartpark-producer`,
+`smartpark-processing`, `smartpark-serving`, `smartpark-ui`) unter *Package
+settings → Change visibility → Public* stellen. Danach ziehen die Pods die
+Images automatisch.
+
+**6. Hochlaufen prüfen.**
+
+```bash
+kubectl -n smartpark get pods      # alle Komponenten -> Running
+```
+
+### 9.4 Zugriff auf UI und API
+
+Für Demo und Screenshots wird der Zugriff per **Port-Forward** hergestellt
+(zwei Terminals, jeweils offen lassen):
+
+```bash
+# Terminal 1 — API
+kubectl -n smartpark port-forward svc/smartpark-api 8000:8000
+# Terminal 2 — UI
+kubectl -n smartpark port-forward svc/smartpark-ui 8080:8080
+```
+
+Anschließend im Browser `http://localhost:8080` öffnen. Die UI liest ihre
+API-URL zur Laufzeit aus der ConfigMap (`ui.apiUrl`, §8.2); für den
+Port-Forward-Betrieb ist sie auf `http://localhost:8000` gesetzt.
+
+> Hinweis zur Reproduzierbarkeit: Der Port-Forward-Zugriff setzt eine laufende
+> `kubectl`-Verbindung des jeweiligen Nutzers voraus und ist damit ein
+> Demo-/Entwicklungszugang. Ein dauerhafter, nutzerunabhängiger Zugang
+> (NodePort oder Ingress/Traefik über die öffentliche IPv4) wäre der nächste
+> Schritt für einen produktiven Betrieb (siehe Ausblick, §12.2).
+
+### 9.5 Häufige Stolpersteine (aus dem realen Betrieb)
+
+- **`ErrImagePull`** → GHCR-Package nicht public (Schritt 5).
+- **`secret not found`** am Serving-Pod → Brücken-Secret fehlt (Schritt 3).
+- **`OOMKilled` an der Serving-API** → Memory-Limit zu niedrig; im Chart auf
+  768 Mi gesetzt (§12.1).
+- **`DiskPressure`-Taint, alle Pods `Pending`** → Root-Disk voll; mit
+  `sudo k3s crictl rmi --prune` alte Images entfernen.
+- **`kubectl` läuft ins Timeout** → nicht im DHBW-VPN, oder k3s auf der VM
+  gestoppt (`sudo systemctl status k3s`).
+
 
 ## 10. Wesentliche Codeabschnitte
 
