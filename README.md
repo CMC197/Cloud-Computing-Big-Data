@@ -740,7 +740,7 @@ Port-Forward-Betrieb ist sie auf `http://localhost:8000` gesetzt.
 > (NodePort oder Ingress/Traefik über die öffentliche IPv4) wäre der nächste
 > Schritt für einen produktiven Betrieb (siehe Ausblick, §12.2).
 
-### 9.5 Häufige Stolpersteine (aus dem realen Betrieb)
+### 9.5 Häufige Stolpersteine (aus unserer Erfahrung)
 
 - **`ErrImagePull`** → GHCR-Package nicht public (Schritt 5).
 - **`secret not found`** am Serving-Pod → Brücken-Secret fehlt (Schritt 3).
