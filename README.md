@@ -621,39 +621,118 @@ Commit-Stand, sind also stabil.
 
 ## 12. Grenzen des Prototyps und Ausblick
 
-<!-- 5 P. "Reflexion und Eigenanteil" · Owner: Koordination
-     Ehrlichkeit zahlt sich hier aus. Die DHBWCloud-Ressourcengrenzen
-     offen benennen, z. B. "Spark auf 1 Executor mit 512 MB begrenzt, weil
-     der VM-Flavor nur X GB RAM hat; in Produktion würde man ...".
-     Plus: Aufgabenverteilung und Eigenanteil (siehe docs/TEAM.md). -->
-
 ### 12.1 Scope-Grenzen
 
-`TODO`
+**Ressourcen der Ziel-VM.** Die DHBWCloud-VM (`mb1.large`, ursprünglich 10 GB,
+später auf 40 GB Root-Disk erweitert, 12 GB RAM) ist die härteste reale
+Grenze des Projekts und hat die Architektur an mehreren Stellen sichtbar
+geprägt:
+
+- **DiskPressure:** Im Betrieb füllte sich die Root-Disk durch wiederholte
+  Image-Builds so weit, dass k3s den Node automatisch mit dem Taint
+  `node.kubernetes.io/disk-pressure:NoSchedule` sperrte — alle Pods, inklusive
+  Kafka, blieben `Pending`. Behoben durch `k3s crictl rmi --prune` (ungenutzte
+  Images entfernen) und später durch Erweiterung der Root-Disk auf 40 GB.
+- **RAM-Grenze am Serving-Pod:** Das ursprüngliche Memory-Limit der Serving-API
+  (256 Mi) reichte nicht, sobald DuckDB die `delta`-Extension lud und einen
+  Scan über eine große Tabelle fuhr — der Container wurde wiederholt vom
+  Kernel mit `OOMKilled` (Exit Code 137) beendet. Behoben durch Anheben des
+  Limits auf 768 Mi **und** durch Umbau der API, die Extension einmalig beim
+  Start statt bei jeder Anfrage zu laden.
+- **Wachsende Delta-Tabellen ohne Kompaktierung:** `read_parquet('*.parquet')`
+  auf einer über Stunden gewachsenen Delta-Tabelle (Bronze, später auch Gold)
+  musste jede jemals geschriebene Dateiversion öffnen und wurde so langsam,
+  dass Anfragen in Timeouts liefen. Kein automatisches `OPTIMIZE`/Compaction
+  ist im Prototyp implementiert — bewusst außerhalb des Scopes gelassen (siehe
+  Ausblick). Für die abgefragten Tabellen wurde stattdessen `delta_scan()`
+  eingesetzt, das nur die aktuell gültige Version liest.
+- **Spark-Kafka-Consumer-Hang:** Unter Last geriet der Structured-Streaming-Job
+  wiederholt in einen Zustand, in dem der Kafka-Consumer laut Log „may hang"
+  (bekanntes Verhalten, referenziert als KAFKA-1894) meldete und keine neuen
+  Batches mehr verarbeitete, obwohl der Pod als `Running` gemeldet wurde. Ein
+  vollständiger Neustart des Processing-Deployments behob dies jeweils; eine
+  automatische Erkennung/Selbstheilung dieses Zustands ist nicht implementiert.
+
+**Funktionaler Scope.** Der Trend-Verlauf je Zone (Zeitreihe aus der
+Gold-Tabelle) wurde in der UI bewusst wieder entfernt, nachdem die zugrunde
+liegende Route unter der oben beschriebenen Dateizahl-Problematik litt. Die
+Live-Anzeige (aktuelle Verfügbarkeit je Zone und je Bucht, aus `bay_current`)
+ist davon nicht betroffen und lief im Test stabil und performant. Ein
+Session-Join oder eine externe Anreicherung (z. B. Wetter- oder
+Kalenderdaten) wurde nicht umgesetzt — der Prototyp konzentriert sich auf die
+geforderte eine (hier: drei, siehe §5) nicht-triviale Transformation.
+Exactly-once-Semantik wurde nicht explizit verifiziert; Delta-Checkpoints und
+-MERGE machen Wiederanläufe idempotent, ein formaler Nachweis fehlt.
+
+**Horizontale Skalierung.** Wie in §8.4 dargelegt, wurde die Skalierung live
+nur am Producer demonstriert; Kafka und Spark sind architektonisch ebenso
+skalierbar ausgelegt, wurden aber bewusst nicht mitskaliert, um die oben
+beschriebenen Ressourcengrenzen der VM nicht zusätzlich zu strapazieren.
 
 ### 12.2 Ausblick
 
-`TODO`
+Mit mehr Zeit oder größerer Infrastruktur wären folgende Erweiterungen
+naheliegend:
 
-### 12.3 Aufgabenverteilung und Eigenanteil
+- **Automatische Kompaktierung** der Delta-Tabellen (periodisches `OPTIMIZE`
+  bzw. `VACUUM`), damit Lesezugriffe auch über Tage/Wochen Laufzeit performant
+  bleiben, ohne manuell einzugreifen.
+- **Autoscaling statt manueller Skalierung**, z. B. ein HorizontalPodAutoscaler
+  auf CPU-Auslastung für Producer/Serving oder KEDA auf Kafka-Consumer-Lag für
+  das Processing.
+- **Mehrere Kafka-Broker** (StatefulSet `replicas > 1`) mit über die
+  Partitionen verteilten Consumer-Gruppen, um die in §8.4 beobachtete
+  Partition-Skew (Zone-basierter Key trifft nur 2 von 3 Partitionen) aufzulösen
+  — z. B. durch eine feinere Partitionierung nach `bay_id` statt `zone_id`.
+- **Formaler Nachweis von Exactly-once-Verarbeitung** über gezielte
+  Fehlerinjektion (Job-Neustart während eines Batches) und Prüfung auf
+  Duplikate in `gold/zone_availability`.
+- **Session-Join/Anreicherung** als zweite nicht-triviale Transformation, z. B.
+  Verweildauer je Bucht durch Verknüpfung aufeinanderfolgender
+  `OCCUPIED`/`FREE`-Events derselben `bay_id`.
+- **Monitoring** (Prometheus/Grafana) statt der manuellen `kubectl
+  top`/Log-Beobachtung, die im Betrieb zur Diagnose der oben genannten
+  Ressourcenprobleme verwendet wurde — damit wären DiskPressure und OOM-Events
+  proaktiv statt reaktiv erkennbar gewesen.
 
-<!-- Aus docs/TEAM.md übernehmen, sobald ausgefüllt. -->
+**Ausblick entlang der Big-Data-V's.** Der Prototyp erfüllt Velocity
+(kontinuierlicher Event-Strom, siehe §2) und in Grenzen Volume (Skalierung des
+Ingest gezeigt, §8.4); **Variety** ist im aktuellen Scope bewusst nicht
+abgedeckt — es gibt genau eine strukturierte Event-Quelle (Belegungs-Events).
+Bei einem Rollout auf eine ganze Stadt kämen realistisch weitere, strukturell
+andersartige Datenquellen hinzu:
 
-`TODO`
+- **Kameradaten/Bilderkennung** an Einfahrten zur Plausibilisierung der
+  Sensor-Events (unstrukturiert/binär statt der aktuellen JSON-Events) —
+  würde eine zusätzliche Ingestion-Route und vermutlich eine
+  Objekterkennungs-Vorverarbeitung vor Kafka nötig machen.
+- **Wetter- und Kalenderdaten** (extern, batch-artig statt streaming) als
+  Anreicherung der Gold-Tabelle — ein klassischer Kandidat für den in §12.1
+  erwähnten Join.
+- **Zahlungs-/Ticketing-Daten** aus Parkscheinautomaten, strukturiert aber mit
+  anderem Schema und anderer Aktualisierungsfrequenz als die Belegungs-Events.
+
+Eine echte Multi-Source-Pipeline mit mehreren strukturell unterschiedlichen
+Eingängen — und damit eine vollständige Erfüllung von Variety — wäre der
+nächste sinnvolle Ausbauschritt, sobald mehr als eine reale Datenquelle zur
+Verfügung steht.
 
 ---
 
 ## Bonus: Abweichungen vom Standardweg
 
-<!-- Kein Pflichtabschnitt, aber: Bonus gibt es NUR mit Begründung.
-     Kandidaten: MinIO/Delta statt HDFS, Exactly-once, Schema-Evolution,
-     KEDA auf Consumer-Lag, CI/CD. -->
+Mehrere Entscheidungen weichen bewusst vom in der Vorlesung gezeigten
+Standardweg ab. Jede ist unten mit der technischen Umsetzung und der
+Begründung aufgeführt.
 
 | Abweichung | Umsetzung | Begründung |
 |---|---|---|
-| `TODO` | | |
+| **MinIO/S3 statt HDFS** | Objektspeicher via MinIO, S3A-Connector in Spark, `delta_scan`/`httpfs` in DuckDB | Entkoppelt Storage von Compute — der Spark-Job kann neu gestartet oder (theoretisch) skaliert werden, ohne dass Daten betroffen sind. Für einen Single-Node-Prototyp auf einer ressourcenbegrenzten VM ist ein leichtgewichtiger Objektspeicher passender als ein HDFS-Cluster mit eigenem NameNode/DataNode-Overhead. |
+| **Delta Lake statt reinem Parquet** | Alle drei Tabellen (Bronze/Gold/bay_current) im Delta-Format mit Transaktionslog | Ermöglicht sichere nebenläufige Schreibvorgänge mehrerer Streaming-Sinks und — zwingend für `bay_current` — Upserts per `MERGE`. Siehe §6.2 für die ausführliche Begründung inklusive der real aufgetretenen Performance-Problematik. |
+| **DuckDB statt zweitem Spark-Prozess für das Serving** | FastAPI + DuckDB mit `delta_scan()` liest die Delta-Tabellen direkt aus MinIO | RAM-schonende Alternative zu einem zweiten, dauerhaft laufenden Spark-Cluster für Lesezugriffe — auf der 12-GB-VM ein spürbarer Unterschied. Wurde during des Betriebs zusätzlich optimiert, siehe §6.2/§12.1. |
+| **Stateful Processing über Mindestanforderung hinaus** | Eigener `foreachBatch`-Sink mit Delta-`MERGE` (`gold/bay_current`, siehe §5.3) zusätzlich zur geforderten einen nicht-trivialen Transformation | Ermöglicht eine performante Live-Ansicht des Zustands jeder einzelnen Parkbucht, die aus der Windowed-Aggregation (Gold) allein nicht ableitbar wäre (dort ist `bay_id` wegaggregiert). Zeigt echtes Stateful-Stream-Processing über eine reine Aggregation hinaus. |
+| **k3s statt Vanilla-Kubernetes** | Leichtgewichtige k3s-Distribution auf der DHBWCloud-VM | Geringerer Ressourcen-Overhead für Kubernetes selbst — auf einer VM mit 12 GB RAM relevant, da mehr Speicher für die eigentlichen Workloads (Kafka, Spark) verbleibt. |
 
----
 
 ## Weiterführende Projektdokumente
 
