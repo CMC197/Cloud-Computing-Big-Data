@@ -167,7 +167,9 @@ aufgetretenen Ressourcenengpässe (§12.1) zeigen.
 
 ### 3.4 Architekturdiagramm
 
-`TODO — folgt`
+![SmartPark Kappa-Architektur — Ende-zu-Ende-Datenfluss](docs/architektur.png)
+
+**Lesart:** Der durchgezogene Pfad ist der reguläre Datenfluss (Producer → Kafka → Spark → drei Delta-Tabellen → API → UI-Anzeige). Der gestrichelte Pfad zeigt den geschlossenen Kreis: Die UI kann als Datenlieferant selbst Events erzeugen (`POST /events` → API → Kafka), die in denselben Verarbeitungspfad einspeisen — kein zweiter, paralleler Weg (Kappa, §3.1).
 
 
 ## 4. Komponenten und Datenfluss
