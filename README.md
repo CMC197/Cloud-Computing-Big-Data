@@ -77,30 +77,98 @@ deklarativ deployt per Helm auf einem k3s-Cluster der DHBWCloud.
 
 ## 3. Architekturentscheidung: Kappa vs. Lambda
 
-<!-- 20 P. (zusammen mit §4) · Owner: <Name>
-     Pflicht: Entscheidung + Begründung + Warum-nicht-Lambda + Diagramm.
-     Das Diagramm MUSS konsistent zu §4 sein — keine verwaisten Boxen. -->
-
 ### 3.1 Entscheidung
 
-`TODO`
+SmartPark ist als **Kappa-Architektur** umgesetzt: Es gibt genau einen
+Verarbeitungspfad — Kafka als alleinige Quelle der Wahrheit, ein einziger
+Spark-Structured-Streaming-Job, der kontinuierlich läuft, und drei
+Delta-Tabellen als materialisierte Ausgaben desselben Stroms. Es existiert
+kein separater Batch-Layer, keine zweite Code-Basis für historische
+Neuberechnungen und keine periodisch angestoßene Voll-Neuberechnung der
+Historie außerhalb des Streams. Jede Komponente der Pipeline — vom Producer
+über Kafka bis zur Serving-API — geht implizit von genau einem
+Verarbeitungspfad aus; das ist keine nachträgliche Beobachtung, sondern die
+Grundannahme, auf der der gesamte Systementwurf beruht.
 
 ### 3.2 Begründung
 
-`TODO`
+**Ein Datenpfad statt zwei Sichten mit unterschiedlicher Genauigkeit.** Lambda
+existiert historisch, um einen Kompromiss zu lösen: Ein Speed-Layer liefert
+schnelle, aber potenziell ungenaue Ergebnisse; ein Batch-Layer korrigiert diese
+später mit der vollständigen, konsolidierten Sicht. SmartPark hat diesen
+Kompromiss nicht — es gibt keinen fachlichen Grund, warum die
+Parkplatz-Verfügbarkeit "grob jetzt" und "exakt morgen" unterschiedlich
+aussehen müsste. Eine belegte Bucht ist belegt, sobald das Event verarbeitet
+ist; es gibt keine nachträgliche Korrektur, die fachlich sinnvoll wäre. Damit
+entfällt der eigentliche Daseinszweck von Lambda für diesen Use Case.
+
+**Late Data ist bereits im Streaming-Pfad gelöst, nicht nachträglich im
+Batch.** Der klassische Grund, überhaupt einen Batch-Layer zu betreiben, ist,
+verspätete oder nachträglich korrigierte Daten in die "endgültige" Sicht
+einzurechnen. Bei SmartPark übernimmt das der Watermark direkt im Stream
+(2 Minuten auf `event_ts`, §5.5): Events, die innerhalb dieses Fensters
+eintreffen, werden korrekt eingerechnet, bevor ein Zeitfenster als
+abgeschlossen gilt; spätere Events werden bewusst verworfen. Ein zusätzlicher
+Batch-Layer würde exakt dieselbe Aufgabe — verspätete Daten korrekt behandeln
+— ein zweites Mal und mit anderer Semantik lösen, ohne einen erkennbaren
+fachlichen Mehrwert zu bringen.
+
+**Eine Code-Basis statt zwei parallel gepflegter Implementierungen.** Bei
+Lambda müsste die Aggregationslogik (hier: die Windowed Aggregation aus §5.2)
+zweimal implementiert werden — einmal für den Speed-Layer (Streaming) und
+einmal für den Batch-Layer (z. B. ein täglicher Spark-Batch-Job über die volle
+Historie) — und beide Implementierungen müssten bei jeder Änderung
+synchron gehalten werden. Das ist eine notorische Fehlerquelle in
+Lambda-Systemen ("das Batch-Ergebnis weicht vom Speed-Ergebnis ab, weil beim
+letzten Update nur eine Seite angepasst wurde"). Bei Kappa steckt die gesamte
+Verarbeitungslogik exakt einmal in
+[`streaming_job.py`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/1f0ce5c/processing/streaming_job.py)
+— es gibt nichts, was auseinanderlaufen könnte.
+
+**Reprocessing ersetzt den Batch-Layer, statt ihn zu ergänzen.** Der andere
+klassische Nutzen eines Batch-Layers — die Möglichkeit, die komplette Historie
+bei Bedarf neu zu berechnen, etwa nach einem Bugfix in der Aggregationslogik —
+ist bei Kappa durch die Bronze-Schicht (§6.1) abgedeckt: Da jedes Rohevent
+unverändert und vollständig in `bronze/parking_events` liegt, lässt sich Gold
+oder bay_current jederzeit aus Bronze neu berechnen, indem der Streaming-Job
+erneut über die (oder Teile der) Bronze-Historie läuft. Das ist genau das
+Kappa-Versprechen: Reprocessing durch erneutes Abspielen des Stroms, statt
+durch eine zweite, dauerhaft mitlaufende Infrastruktur.
+
+**Ressourcen-Passung auf der Ziel-Hardware.** Auf der DHBWCloud-VM mit 12 GB
+RAM (§12.1) wäre ein zusätzlicher Batch-Layer — typischerweise ein eigener,
+periodisch angestoßener Spark-Job mit eigenem Scheduling und eigenem
+Ressourcenbedarf — ein weiterer, schwer zu rechtfertigender RAM- und
+CPU-Verbraucher neben dem bereits knapp bemessenen Streaming-Job (`local[2]`,
+siehe §12.1 zu den dort real aufgetretenen `OOMKilled`-Ereignissen). Kappa
+passt damit nicht nur fachlich, sondern auch infrastrukturell besser zu den
+tatsächlich verfügbaren Ressourcen dieses Prototyps.
 
 ### 3.3 Warum nicht Lambda?
 
-`TODO`
+Lambda wäre die naheliegende Alternative gewesen, wenn SmartPark zwei fachlich
+unterschiedliche Antworten auf dieselbe Frage bräuchte — etwa eine schnelle,
+aber ungenaue Live-Schätzung der Verfügbarkeit für die App-Anzeige *und*
+parallel eine exakte, aber verzögerte End-of-Day-Statistik für Abrechnungs-
+oder Auslastungsberichte an die Stadtverwaltung. Ein solches Szenario ist
+denkbar, liegt aber außerhalb des hier gewählten Scopes (siehe Ausblick,
+§12.2, zu möglichen künftigen Auswertungen). Im aktuellen Scope sind sowohl
+die Zeitfenster-Aggregation (Gold, §5.2) als auch der aktuelle Bucht-Zustand
+(bay_current, §5.3) *dieselbe Art* von Antwort auf denselben Datenstrom, nur
+unterschiedlich geformt für unterschiedliche Lesezugriffe — nicht zwei
+Sichten unterschiedlicher Genauigkeit oder Aktualität. Es gibt also keinen
+fachlichen Bedarf, dieselbe zugrunde liegende Frage zweimal (einmal im
+Batch-, einmal im Speed-Layer) zu beantworten. Der Mehraufwand von Lambda —
+zwei getrennte Pipelines, ein Mechanismus zum Abgleich/Merge von Batch- und
+Speed-Ergebnissen, doppelte Infrastruktur und doppelter Betriebsaufwand —
+stünde in keinem Verhältnis zum Nutzen für diesen Use Case und wäre auf der
+verfügbaren Hardware zusätzlich riskant gewesen, wie die im Betrieb real
+aufgetretenen Ressourcenengpässe (§12.1) zeigen.
 
 ### 3.4 Architekturdiagramm
 
-<!-- Bild nach docs/ legen und hier einbinden: -->
-<!-- ![Architekturdiagramm](docs/architektur.png) -->
+`TODO — folgt`
 
-`TODO`
-
----
 
 ## 4. Komponenten und Datenfluss
 
