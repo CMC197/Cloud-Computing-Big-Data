@@ -441,28 +441,79 @@ neu gestartet oder skaliert werden, ohne dass die Daten davon betroffen sind
 
 ## 7. User-facing UI
 
-<!-- 10 P. · Owner: AP4
-     ⚠️ Die UI muss REAL an die Pipeline angebunden sein (kein Mockup) und als
-     eigene containerisierte Komponente auf k8s laufen.
-     Beide Rollen beschreiben: Datenlieferant UND Anzeige. -->
+Die UI ist eine eigenständige React-Anwendung (Vite-Build, als Nginx-Container
+auf Kubernetes deployt — §8.1), die **real** an die laufende Pipeline
+angebunden ist (kein Mockup): Sämtliche Anzeigen stammen aus der Serving-API,
+und eingespeiste Events durchlaufen dieselbe Pipeline wie die des Producers.
+Sie deckt beide geforderten Rollen ab.
 
 ### 7.1 Rolle A — Datenlieferant (Event-Injektor)
 
-`TODO`
+Der Event-Injektor
+([`EventInjector.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/components/EventInjector.jsx))
+erlaubt es, gezielt einzelne Belegungs-Events in die Pipeline einzuspeisen: Über
+Auswahlfelder wählt man **Zone** (`zone-0` … `zone-4`), **Bucht** (`bay-<z>-<n>`)
+und **Zustand** (`OCCUPIED` / `FREE`) und löst mit „Event senden" einen
+`POST /events` an die API aus. Zusätzlich erzeugt ein Button „10 zufällige
+Events" einen kleinen Stoß zufälliger Events (Burst) — praktisch, um schnell
+Last zu erzeugen und die Reaktion der Anzeige zu beobachten. Jedes gesendete
+Event wird in einem kleinen Log-Bereich mitprotokolliert. Das ist die
+konkrete Umsetzung der Datenlieferanten-Rolle: Der Mensch erzeugt über die
+Weboberfläche echte Events, die in die Ingestion fließen.
 
-### 7.2 Rolle B — Anzeige (Verfügbarkeit und Trends)
+### 7.2 Rolle B — Anzeige (Live-Verfügbarkeit)
 
-`TODO`
+Die Anzeige besteht aus drei aufeinander abgestimmten Bausteinen:
+
+- **KPI-Kopfzeile**
+  ([`KpiHeader.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/components/KpiHeader.jsx))
+  — aggregierte Kennzahlen über alle Zonen: freie/belegte Plätze gesamt,
+  Belegungsquote und Anzahl aktiver Zonen.
+- **Zonen-Übersicht**
+  ([`ZoneGrid.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/components/ZoneGrid.jsx))
+  — je Zone eine Karte mit belegt/frei-Zahlen und einer farbigen
+  Belegungs-Ampel; Datenquelle ist `GET /zones/availability`.
+- **Bucht-Raster**
+  ([`BayGrid.jsx`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/components/BayGrid.jsx))
+  — nach Auswahl einer Zone der Zustand jeder einzelnen Parkbucht als
+  farbcodiertes Raster (grün = frei, rot = belegt); Datenquelle ist
+  `GET /zones/{zone_id}/bays`.
+
+Die Anzeige aktualisiert sich per Polling in kurzen Intervallen, sodass
+eingespeiste Events nach dem Pipeline-Durchlauf automatisch sichtbar werden.
+
+> Hinweis: Eine ursprünglich geplante Trend-/Verlaufsansicht je Zone (aus der
+> Gold-Tabelle) wurde bewusst entfernt, da die zugrunde liegende Abfrage auf
+> der ressourcenbegrenzten VM zu teuer wurde (siehe §12.1). Die
+> Live-Verfügbarkeit (Zonen und Buchten) ist davon nicht betroffen.
 
 ### 7.3 Anbindung an die Pipeline
 
-`TODO`
+Alle Backend-Aufrufe laufen zentral über einen API-Client
+([`ui/src/api/client.js`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/api/client.js)):
+`getAvailability` und `getBays` für die Anzeige, `postEvent` für den
+Datenlieferanten. Die **API-Basis-URL wird zur Laufzeit** aufgelöst
+([`config.js`](https://github.com/CMC197/Cloud-Computing-Big-Data/blob/e9ee9ad/ui/src/api/config.js)) —
+über `window.__SMARTPARK_CONFIG__`, das im Cluster aus einer ConfigMap als
+`config.js` in den Nginx-Container gemountet wird (§8.2). Die URL ist damit
+**nicht ins Image gebacken**; dasselbe Container-Image läuft ohne Neubau in
+verschiedenen Umgebungen. Damit ist die UI eine vollwertige, real angebundene
+Komponente und kein Mockup.
 
-### 7.4 Bedienablauf
+### 7.4 Bedienablauf (Durchstich)
 
-`TODO`
+Der typische Ablauf, der zugleich den Ende-zu-Ende-Durchstich zeigt:
 
----
+1. Nutzer wählt im Injektor (Rolle A) Zone, Bucht und Zustand und klickt „Event
+   senden".
+2. Die UI sendet `POST /events` → die API produziert das Event nach Kafka.
+3. Der Spark-Job verarbeitet es und aktualisiert Gold und bay_current.
+4. Die Anzeige (Rolle B) pollt die API und zeigt die geänderte Verfügbarkeit
+   bzw. die umgefärbte Bucht-Kachel an.
+
+Dieser sichtbare Kreislauf — Event über die UI rein, verarbeitet wieder
+heraus — ist der Nachweis der realen Pipeline-Anbindung.
+
 
 ## 8. Kubernetes-Deployment
 
