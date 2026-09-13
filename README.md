@@ -1,8 +1,8 @@
 # SmartPark — Streaming-basiertes Smart-Parking-System auf Kubernetes
 
 > **Modul:** Cloud Computing und Big Data · Prüfungsleistung 2026 · Prof. Dr.-Ing. habil. Dennis Pfisterer
-> **Gruppe:** `<X>` · **Teammitglieder:** `<Name 1>`, `<Name 2>`, `<Name 3>`, `<Name 4>`
-> **Repo:** `<URL>` · **Abgabe:** `<TT.MM.JJJJ>`
+> **Gruppe:** `<Letzte Reihe>` · **Teammitglieder:** `<Leo>`, `<Niklas>`, `<Nikolay>`, `<Philip>`
+> **Repo:** `<https://github.com/CMC197/Cloud-Computing-Big-Data>` · **Abgabe:** `<13.09.2026>`
 
 <!--
 ═══════════════════════════════════════════════════════════════════════
